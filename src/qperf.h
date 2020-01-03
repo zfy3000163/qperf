@@ -33,7 +33,14 @@
  * SOFTWARE.
  */
 #define _GNU_SOURCE
+#include <stdio.h>
 #include <netdb.h>
+
+#include "qperf_ff.h"
+#include "ff_config.h"
+#include "ff_api.h"
+#include "ff_epoll.h"
+
 
 
 /*

@@ -260,10 +260,10 @@ recv_sync(char *msg)
 {
     char data[64];
     int n = strlen(msg);
-
     if (n > sizeof(data))
         error(BUG, "buffer in recv_sync() too small");
-    recv_mesg(data, n, msg);
+    int iret = recv_mesg(data, n, msg);
+    printf("iret:%d, data:%s, msg:%s, n:%d\n", iret, data, msg, n);
     if (memcmp(data, msg, n) != 0)
         error(0, "synchronize %s failure: data does not match", msg);
 }
@@ -277,7 +277,8 @@ send_mesg(void *ptr, int len, char *item)
 {
     if (item)
         debug("sending %s", item);
-    return send_recv_mesg('s', item, RemoteFD, ptr, len);
+    //return send_recv_mesg('s', item, RemoteFD, ptr, len);
+    return ff_write(RemoteFD, ptr, len);
 }
 
 
@@ -289,7 +290,7 @@ recv_mesg(void *ptr, int len, char *item)
 {
     if (item)
         debug("waiting for %s", item);
-    return send_recv_mesg('r', item, RemoteFD, ptr, len);
+    return ff_read(RemoteFD, ptr, len);
 }
 
 

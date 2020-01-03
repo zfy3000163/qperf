@@ -40,6 +40,8 @@
 #include <unistd.h>
 #include "qperf.h"
 
+extern int bw_listenFD;
+extern uint32_t bw_port;
 
 /*
  * Parameters.
@@ -299,8 +301,9 @@ stream_server_bw(KIND kind)
 {
     int sockFD = -1;
     char *buf = 0;
-
+    printf("bw in\n");
     stream_server_init(&sockFD, kind);
+
     sync_test();
     buf = qmalloc(Req.msg_size);
     while (!Finished) {
@@ -316,6 +319,7 @@ stream_server_bw(KIND kind)
         LStat.r.no_msgs++;
         if (Req.access_recv)
             touch_data(buf, Req.msg_size);
+        printf("n:%d\n", n);
     }
     stop_test_timer();
     exchange_results();
@@ -333,7 +337,6 @@ stream_client_lat(KIND kind)
 {
     char *buf;
     int sockFD;
-
     client_init(&sockFD, kind);
     buf = qmalloc(Req.msg_size);
     sync_test();
@@ -614,32 +617,38 @@ client_init(int *fd, KIND kind)
 static void
 stream_server_init(int *fd, KIND kind)
 {
+#if 1
     uint32_t port;
     AI *ai;
-    int listenFD = -1;
+    int bw_listenFD = -1;
 
     AI *ailist = getaddrinfo_kind(1, kind,  Req.port);
     for (ai = ailist; ai; ai = ai->ai_next) {
         if (!ai->ai_family)
             continue;
-        listenFD = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (listenFD < 0)
+        bw_listenFD = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (bw_listenFD < 0)
             continue;
-        setsockopt_one(listenFD, SO_REUSEADDR);
-        if (bind(listenFD, ai->ai_addr, ai->ai_addrlen) == SUCCESS0)
+        setsockopt_one(bw_listenFD, SO_REUSEADDR);
+        if (bind(bw_listenFD, ai->ai_addr, ai->ai_addrlen) == SUCCESS0)
             break;
-        close(listenFD);
-        listenFD = -1;
+        close(bw_listenFD);
+        bw_listenFD = -1;
     }
     freeaddrinfo(ailist);
     if (!ai)
         error(0, "unable to make %s socket", kind_name(kind));
-    if (listen(listenFD, 1) < 0)
+    if (listen(bw_listenFD, 1) < 0)
         error(SYS, "listen failed");
 
-    get_socket_port(listenFD, &port);
+    get_socket_port(bw_listenFD, &port);
     encode_uint32(&port, port);
-    send_mesg(&port, sizeof(port), "port");
+
+    //send_mesg(&port, sizeof(port), "port");
+    
+    bw_port = port;
+
+#if 0
     *fd = accept(listenFD, 0, 0);
     if (*fd < 0)
         error(SYS, "accept failed");
@@ -647,6 +656,61 @@ stream_server_init(int *fd, KIND kind)
     set_socket_buffer_size(*fd);
     close(listenFD);
     debug("receiving to %s port %d", kind_name(kind), port);
+#endif
+    
+#else
+    uint32_t port;
+    int listenFD = -1;
+
+    int sockfd;
+    printf("Req.port:%d\n", Req.port);
+    sockfd = ff_socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        printf("ff_socket failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
+        exit(1);
+    }
+
+    struct sockaddr_in my_addr;
+    bzero(&my_addr, sizeof(my_addr));
+    my_addr.sin_family = AF_INET;
+    my_addr.sin_port = htons(Req.port);
+    my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    setsockopt_one(sockfd, SO_REUSEADDR);
+    int ret = ff_bind(sockfd, &my_addr, sizeof(my_addr));
+    if (ret < 0) {
+        printf("ff_bind failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
+        exit(1);
+    }
+
+    ret = ff_listen(sockfd, 1);
+    if (ret < 0) {
+        printf("ff_listen failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
+        exit(1);
+    }
+    listenFD = sockfd;
+
+    get_socket_port(listenFD, &port);
+    encode_uint32(&port, port);
+    send_mesg(&port, sizeof(port), "port");
+
+    socklen_t clientLen;
+    struct sockaddr_in clientAddr;
+    clientLen = sizeof(clientAddr);
+    *fd= ff_accept(listenFD, (struct sockaddr *)&clientAddr, &clientLen);
+
+    //*fd = ff_accept(listenFD, 0, 0);
+    printf("*fd:%d\n", *fd);
+    if (*fd < 0)
+        error(SYS, "accept failed");
+    debug("accepted %s connection", kind_name(kind));
+    set_socket_buffer_size(*fd);
+    ff_close(listenFD);
+    debug("receiving to %s port %d", kind_name(kind), port);
+
+
+#endif
+
 }
 
 
@@ -699,10 +763,8 @@ getaddrinfo_kind(int serverflag, KIND kind, int port)
         .ai_socktype = SOCK_STREAM
     };
 
-    if (serverflag){
+    if (serverflag)
         hints.ai_flags |= AI_PASSIVE;
-        hints.ai_family = AF_INET6;
-    }	
     if (kind == K_UDP)
         hints.ai_socktype = SOCK_DGRAM;
 
@@ -752,11 +814,12 @@ get_socket_port(int fd, uint32_t *port)
     SS sa;
     socklen_t salen = sizeof(sa);
 
-    if (getsockname(fd, (SA *)&sa, &salen) < 0)
-        error(SYS, "getsockname failed");
+    if (ff_getsockname(fd, (struct linux_sockaddr*)&sa, &salen) < 0)
+        error(SYS, "getsockname2 failed");
     if (getnameinfo((SA *)&sa, salen, 0, 0, p, sizeof(p), NI_NUMERICSERV) < 0)
         error(SYS, "getnameinfo failed");
     *port = atoi(p);
+    printf("fd:%d, port:%d\n", fd, *port);
     if (!port)
         error(0, "invalid port");
 }

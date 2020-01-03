@@ -1874,14 +1874,12 @@ cm_open_server(DEVICE *dev)
         error(0, "rdma_bind_addr failed");
     port = ntohs(rdma_get_src_port(cm->id));
     encode_uint32(&port, port);
+    send_mesg(&port, sizeof(port), "RDMA CM TCP IPv4 server port");
 
     if (rdma_listen(cm->id, 0) != 0)
         error(0, "rdma_listen failed");
-    send_mesg(&port, sizeof(port), "RDMA CM TCP IPv4 server port");
-
     cm_expect_event(dev, RDMA_CM_EVENT_CONNECT_REQUEST);
-    cm->id = cm->event->id;
-    rd_create_qp(dev, cm->id->verbs, cm->id);
+    rd_create_qp(dev, cm->event->id->verbs, cm->event->id);
 
     if (dev->trans == IBV_QPT_RC) {
         struct rdma_conn_param param ={
@@ -1894,7 +1892,7 @@ cm_open_server(DEVICE *dev)
             .min_rnr_timer = MIN_RNR_TIMER,
         };
 
-        if (rdma_accept(cm->id, &param) != 0)
+        if (rdma_accept(cm->event->id, &param) != 0)
             error(0, "rdma_accept failed");
         cm_ack_event(dev);
         cm_expect_event(dev, RDMA_CM_EVENT_ESTABLISHED);
@@ -1907,7 +1905,7 @@ cm_open_server(DEVICE *dev)
             .qp_num = cm->event->id->qp->qp_num
         };
 
-        if (rdma_accept(cm->id, &param) != 0)
+        if (rdma_accept(cm->event->id, &param) != 0)
             error(0, "rdma_accept failed");
         dev->qkey = cm->event->param.ud.qkey;
         dev->ah = ibv_create_ah(dev->pd, &cm->event->param.ud.ah_attr);

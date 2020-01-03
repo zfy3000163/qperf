@@ -53,6 +53,18 @@
 #include <sys/utsname.h>
 #include "qperf.h"
 
+#include <assert.h>
+
+
+
+int bw_listenFD = -1;
+uint32_t bw_port = 0;
+
+#define MAX_EVENTS 512
+struct epoll_event ev;
+struct epoll_event events[MAX_EVENTS];
+int epfd;
+
 
 /*
  * Configurable parameters.  If your change makes this version of qperf
@@ -62,7 +74,7 @@
  */
 #define VER_MAJ 0                       /* Major version */
 #define VER_MIN 4                       /* Minor version */
-#define VER_INC 11                       /* Incremental version */
+#define VER_INC 10                      /* Incremental version */
 #define LISTENQ 5                       /* Size of listen queue */
 #define BUFSIZE 1024                    /* Size of buffers */
 
@@ -212,7 +224,7 @@ static void      run_client_conf(void);
 static void      run_client_quit(void);
 static void      run_server_conf(void);
 static void      run_server_quit(void);
-static void      server(void);
+int      server(void *arg);
 static void      server_listen(void);
 static int       server_recv_request(void);
 static void      set_affinity(void);
@@ -600,6 +612,10 @@ TEST Tests[] ={
 int
 main(int argc, char *argv[])
 {
+    ff_init(argc, argv);
+    ff_mod_init();
+    //assert((epfd = ff_epoll_create(0)) > 0);
+
     initialize();
     set_signals();
     do_args(&argv[1]);
@@ -754,8 +770,18 @@ do_args(char *args[])
         }
     }
 
-    if (!isClient)
-        server();
+    if (!isClient){
+        server_listen();
+
+        assert((epfd = ff_epoll_create(0)) > 0);
+        ev.data.fd = ListenFD;
+        ev.events = EPOLLIN;
+        ff_epoll_ctl(epfd, EPOLL_CTL_ADD, ListenFD, &ev);
+
+
+        //server();
+        ff_run(server, NULL);
+    }
     else if (!testSpecified) {
         if (!ServerName)
             error(0, "you used a client-only option but did not specify the "
@@ -1333,50 +1359,93 @@ opt_check(void)
 /*
  * Server.
  */
-static void
-server(void)
+int  
+server(void * arg)
 {
-    server_listen();
-    for (;;) {
+
+    int nevents = ff_epoll_wait(epfd,  events, MAX_EVENTS, 0);
+    int i, iret;
+    if (nevents != 0)
+	printf("nevents:%d\n", nevents);
+
+    for (i = 0; i < nevents; ++i) {
         REQ req;
         pid_t pid;
         TEST *test;
+        /* Handle new connect */
         int s = offset(REQ, req_index);
+        if (events[i].data.fd == ListenFD) {
+            while (1) {
+               printf("ready for requests\n");
 
-        debug("ready for requests");
-        if (!server_recv_request())
-            continue;
-        pid = fork();
-        if (pid < 0) {
-            error(SYS|RET, "fork failed");
-            continue;
+               /*socklen_t clientLen;
+               struct sockaddr_in clientAddr;
+               clientLen = sizeof(clientAddr);
+               RemoteFD = ff_accept(ListenFD, (struct sockaddr *)&clientAddr, &clientLen);
+               //RemoteFD = ff_accept(ListenFD, NULL, NULL);
+               if(RemoteFD < 0){
+		    break;
+               }
+               printf("remoteFD:%d\n", RemoteFD);
+               */
+               //if (!server_recv_request())
+               iret = server_recv_request();
+               printf("request iret:%d\n", iret);
+               if(!iret)
+               {
+                    printf("ff_accept failed:%d, %s\n", errno,
+                        strerror(errno));
+                    break;
+	       }
+               
+
+                /* Add to event list */
+                ev.data.fd = RemoteFD;
+                ev.events  = EPOLLIN;
+                if (ff_epoll_ctl(epfd, EPOLL_CTL_ADD, RemoteFD, &ev) != 0) {
+                    printf("ff_epoll_ctl failed:%d, %s\n", errno,
+                        strerror(errno));
+                    break;
+                }
+            }
+        } else { 
+            if (events[i].events & EPOLLERR ) {
+                /* Simply close socket */
+                ff_epoll_ctl(epfd, EPOLL_CTL_DEL,  events[i].data.fd, NULL);
+                ff_close(events[i].data.fd);
+            } else if (events[i].events & EPOLLIN) {
+              
+
+                printf("read...\n");
+                //remotefd_setup();
+
+                iret = recv_mesg(&req, s, "request version");
+                printf("recv iret:%d\n", iret);
+                dec_init(&req);
+                dec_req_version(&Req);
+                if (Req.ver_maj != VER_MAJ || Req.ver_min != VER_MIN)
+                    version_error();
+                recv_mesg(&req.req_index, sizeof(req)-s, "request data");
+                dec_req_data(&Req);
+                if (Req.req_index >= cardof(Tests))
+                    error(0, "bad request index: %d", Req.req_index);
+
+                test = &Tests[Req.req_index];
+                TestName = test->name;
+                printf("received request: %s", TestName);
+                init_lstat();
+                set_affinity();
+                (test->server)();
+
+            } else {
+                printf("unknown event: %8.8X\n", events[i].events);
+                return -1;
+            }
         }
-        if (pid > 0) {
-            remotefd_close();
-            waitpid(pid, 0, 0);
-            continue;
-        }
-        remotefd_setup();
-
-        recv_mesg(&req, s, "request version");
-        dec_init(&req);
-        dec_req_version(&Req);
-        if (Req.ver_maj != VER_MAJ || Req.ver_min != VER_MIN)
-            version_error();
-        recv_mesg(&req.req_index, sizeof(req)-s, "request data");
-        dec_req_data(&Req);
-        if (Req.req_index >= cardof(Tests))
-            error(0, "bad request index: %d", Req.req_index);
-
-        test = &Tests[Req.req_index];
-        TestName = test->name;
-        debug("received request: %s", TestName);
-        init_lstat();
-        set_affinity();
-        (test->server)();
-        exit(0);
     }
-    close(ListenFD);
+
+    return 0;
+    
 }
 
 
@@ -1415,19 +1484,38 @@ version_error(void)
 static void
 server_listen(void)
 {
+#if 0
     AI *ai;
     AI hints ={
         .ai_flags    = AI_PASSIVE | AI_NUMERICSERV,
-	.ai_family   = AF_INET6,
+        .ai_family   = AF_UNSPEC,
+        //.ai_family   = AF_INET,
         .ai_socktype = SOCK_STREAM
     };
+    memset(&hints, 0x0, sizeof(AI));
     AI *ailist = getaddrinfo_port(0, ListenPort, &hints);
 
+    char ip[46];
+    int ipbuf_len = 46;
+    memset(&ip, 0x0, 46);
+    char *ipbuf = ip;
     for (ai = ailist; ai; ai = ai->ai_next) {
+        if(ai->ai_family == 10)
+             continue;
         ListenFD = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        printf("Listen:%d, family:%d, socktype:%d, protocol:%d\n", ListenFD, ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (ListenFD < 0)
             continue;
         setsockopt_one(ListenFD, SO_REUSEADDR);
+    if (ai->ai_family == AF_INET) {
+        struct sockaddr_in *sa = (struct sockaddr_in *)ai->ai_addr;
+        sa->sin_addr.s_addr = htonl(INADDR_ANY);
+        inet_ntop(AF_INET, &(sa->sin_addr), ipbuf, ipbuf_len);
+    } else {
+        struct sockaddr_in6 *sa = (struct sockaddr_in6 *)ai->ai_addr;
+        inet_ntop(AF_INET6, &(sa->sin6_addr), ipbuf, ipbuf_len);
+    }
+        printf("%d,%s\n", ipbuf_len, ipbuf);
         if (bind(ListenFD, ai->ai_addr, ai->ai_addrlen) == SUCCESS0)
             break;
         close(ListenFD);
@@ -1438,8 +1526,42 @@ server_listen(void)
 
     if (!Req.timeout)
         Req.timeout = DEF_TIMEOUT;
-    if (listen(ListenFD, LISTENQ) < 0)
+    if (listen(ListenFD, MAX_EVENTS) < 0)
         error(SYS, "listen failed");
+#else
+    int sockfd;
+    sockfd = ff_socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        printf("ff_socket failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
+        exit(1);
+    }
+
+    int on = 1;
+    int iret = ff_ioctl(sockfd, FIONBIO, &on);
+    printf("FIONBIO iret:%d\n", iret);
+
+    struct sockaddr_in my_addr;
+    bzero(&my_addr, sizeof(my_addr));
+    my_addr.sin_family = AF_INET;
+    my_addr.sin_port = htons(19765);
+    my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    int ret = ff_bind(sockfd, (struct linux_sockaddr*)&my_addr, sizeof(my_addr));
+    if (ret < 0) {
+        printf("ff_bind failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
+        exit(1);
+    }
+
+     ret = ff_listen(sockfd, MAX_EVENTS);
+    if (ret < 0) {
+        printf("ff_listen failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
+        exit(1);
+    }
+    ListenFD = sockfd;
+
+
+
+#endif
 }
 
 
@@ -1449,13 +1571,16 @@ server_listen(void)
 static int
 server_recv_request(void)
 {
+    int iret;
     socklen_t clientLen;
-    SS clientAddr;
-
+    struct sockaddr_in clientAddr;
     clientLen = sizeof(clientAddr);
-    RemoteFD = accept(ListenFD, (struct sockaddr *)&clientAddr, &clientLen);
-    if (RemoteFD < 0)
+    iret = ff_accept(ListenFD, (struct linux_sockaddr *)&clientAddr, &clientLen);
+    //iret = ff_accept(ListenFD, NULL, NULL);
+    printf("RemoteFD faunc:%d\n", iret);
+    if (iret < 0)
         return error(SYS|RET, "accept failed");
+    RemoteFD = iret; 
     return 1;
 }
 
@@ -1508,6 +1633,7 @@ client_send_request(void)
         .ai_family   = AF_UNSPEC,
         .ai_socktype = SOCK_STREAM
     };
+    memset(&hints, 0x0, sizeof(AI));
     AI *ailist = getaddrinfo_port(ServerName, ListenPort, &hints);
 
     RemoteFD = -1;
@@ -1554,10 +1680,10 @@ remotefd_setup(void)
 {
     int one = 1;
 
-    if (ioctl(RemoteFD, FIONBIO, &one) < 0)
-        error(SYS, "ioctl FIONBIO failed");
-    if (fcntl(RemoteFD, F_SETOWN, getpid()) < 0)
-        error(SYS, "fcntl F_SETOWN failed");
+    if (ff_ioctl(RemoteFD, FIONBIO, &one) < 0)
+        error(SYS, "ioctl FIONBIO failed....");
+    //if (fcntl(RemoteFD, F_SETOWN, getpid()) < 0)
+    //    error(SYS, "fcntl F_SETOWN failed");
 }
 
 
@@ -2784,8 +2910,6 @@ get_times(CLOCK timex[T_N])
     if (lseek(ProcStatFD, 0, 0) < 0)
         error(SYS, "failed to seek /proc/stat");
     n = read(ProcStatFD, buf, sizeof(buf)-1);
-    if (n < 0)
-        error(SYS, "failed to read /proc/stat");
     buf[n] = '\0';
     if (strncmp(buf, "cpu ", 4))
         error(0, "/proc/stat does not start with 'cpu '");
