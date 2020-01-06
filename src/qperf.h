@@ -34,6 +34,7 @@
  */
 #define _GNU_SOURCE
 #include <stdio.h>
+#include <assert.h>
 #include <netdb.h>
 
 #include "qperf_ff.h"
@@ -287,6 +288,7 @@ void        urgent(void);
 /*
  * Socket tests in socket.c.
  */
+int stream_server_bw_loop(void *arg);
 void    run_client_rds_bw(void);
 void    run_server_rds_bw(void);
 void    run_client_rds_lat(void);

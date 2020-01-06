@@ -53,12 +53,10 @@
 #include <sys/utsname.h>
 #include "qperf.h"
 
-#include <assert.h>
 
 
 
-int bw_listenFD = -1;
-uint32_t bw_port = 0;
+
 
 #define MAX_EVENTS 512
 struct epoll_event ev;
@@ -252,6 +250,7 @@ static void      view_size(int type, char *pref, char *name, long long value);
 static void      view_strn(int type, char *pref, char *name, char *value);
 static void      view_time(int type, char *pref, char *name, double value);
 
+static int qperf_loop(void *arg);
 
 /*
  * Configurable variables.
@@ -780,7 +779,7 @@ do_args(char *args[])
 
 
         //server();
-        ff_run(server, NULL);
+        ff_run(qperf_loop, NULL);
     }
     else if (!testSpecified) {
         if (!ServerName)
@@ -1356,6 +1355,14 @@ opt_check(void)
 }
 
 
+static int qperf_loop(void *arg)
+{
+
+    server(arg);
+    stream_server_bw_loop(arg);
+}
+
+int bw_step = 0;
 /*
  * Server.
  */
@@ -1399,6 +1406,7 @@ server(void * arg)
 	       }
                
 
+                bw_step = 0;
                 /* Add to event list */
                 ev.data.fd = RemoteFD;
                 ev.events  = EPOLLIN;
@@ -1411,6 +1419,8 @@ server(void * arg)
         } else { 
             if (events[i].events & EPOLLERR ) {
                 /* Simply close socket */
+                printf("main qperf close listenfd\n");
+
                 ff_epoll_ctl(epfd, EPOLL_CTL_DEL,  events[i].data.fd, NULL);
                 ff_close(events[i].data.fd);
             } else if (events[i].events & EPOLLIN) {
@@ -1419,24 +1429,34 @@ server(void * arg)
                 printf("read...\n");
                 //remotefd_setup();
 
-                iret = recv_mesg(&req, s, "request version");
-                printf("recv iret:%d\n", iret);
-                dec_init(&req);
-                dec_req_version(&Req);
-                if (Req.ver_maj != VER_MAJ || Req.ver_min != VER_MIN)
-                    version_error();
-                recv_mesg(&req.req_index, sizeof(req)-s, "request data");
-                dec_req_data(&Req);
-                if (Req.req_index >= cardof(Tests))
-                    error(0, "bad request index: %d", Req.req_index);
+                bw_step++;
+                if(bw_step == 1){
+                    iret = recv_mesg(&req, s, "request version");
+                    printf("recv iret:%d\n", iret);
+                    dec_init(&req);
+                    dec_req_version(&Req);
+                    if (Req.ver_maj != VER_MAJ || Req.ver_min != VER_MIN)
+                        version_error();
+                    recv_mesg(&req.req_index, sizeof(req)-s, "request data");
+                    dec_req_data(&Req);
+                    if (Req.req_index >= cardof(Tests))
+                        error(0, "bad request index: %d", Req.req_index);
 
-                test = &Tests[Req.req_index];
-                TestName = test->name;
-                printf("received request: %s", TestName);
-                init_lstat();
-                set_affinity();
-                (test->server)();
+                    test = &Tests[Req.req_index];
+                    TestName = test->name;
+                    printf("received request: %s, %u, %u", TestName, LStat.r.no_bytes, LStat.r.no_msgs);
+                    init_lstat();
+                    set_affinity();
+                    (test->server)();
+                }
+                else if(bw_step == 2){
+                    sync_test();
+                    recv_sync("synchronization before test"); 
 
+                }
+                else if (bw_step == 3){
+                    recv_sync("synchronization after test"); 
+                }
             } else {
                 printf("unknown event: %8.8X\n", events[i].events);
                 return -1;
@@ -1484,7 +1504,7 @@ version_error(void)
 static void
 server_listen(void)
 {
-#if 0
+#if 1
     AI *ai;
     AI hints ={
         .ai_flags    = AI_PASSIVE | AI_NUMERICSERV,
@@ -1507,6 +1527,10 @@ server_listen(void)
         if (ListenFD < 0)
             continue;
         setsockopt_one(ListenFD, SO_REUSEADDR);
+        int on = 1;
+        int iret = ff_ioctl(ListenFD, FIONBIO, &on);
+        printf("FIONBIO iret:%d\n", iret);
+
     if (ai->ai_family == AF_INET) {
         struct sockaddr_in *sa = (struct sockaddr_in *)ai->ai_addr;
         sa->sin_addr.s_addr = htonl(INADDR_ANY);
@@ -1682,8 +1706,8 @@ remotefd_setup(void)
 
     if (ff_ioctl(RemoteFD, FIONBIO, &one) < 0)
         error(SYS, "ioctl FIONBIO failed....");
-    //if (fcntl(RemoteFD, F_SETOWN, getpid()) < 0)
-    //    error(SYS, "fcntl F_SETOWN failed");
+    if (fcntl(RemoteFD, F_SETOWN, getpid()) < 0)
+        error(SYS, "fcntl F_SETOWN failed");
 }
 
 
@@ -1717,8 +1741,12 @@ exchange_results(void)
     } else {
         enc_init(&stat);
         enc_stat(&LStat);
+        //printf("%d, %d\n", stat.s.no_bytes, stat.s.no_msgs);
+        //printf("%d, %d\n", stat.r.no_bytes, stat.r.no_msgs);
+        //printf("%d, %d\n", stat.rem_s.no_bytes, stat.rem_s.no_msgs);
+        //printf("%d, %d\n", stat.rem_r.no_bytes, stat.rem_r.no_msgs);
         send_mesg(&stat, sizeof(stat), "results");
-        recv_sync("synchronization after test");
+        //recv_sync("synchronization after test");
     }
 }
 
@@ -1729,6 +1757,8 @@ exchange_results(void)
 static void
 init_lstat(void)
 {
+    printf("IStat:%d, %d\n", IStat.r.no_bytes, IStat.r.no_msgs);
+    printf("IStat:%d, %d\n", IStat.s.no_bytes, IStat.s.no_msgs);
     memcpy(&LStat, &IStat, sizeof(LStat));
 }
 
@@ -2846,6 +2876,12 @@ enc_stat(STAT *host)
     enc_ustat(&host->r);
     enc_ustat(&host->rem_s);
     enc_ustat(&host->rem_r);
+    printf("s: %u, %u\n", host->s.no_bytes, host->s.no_bytes);
+    printf("r: %u, %u\n", host->r.no_bytes, host->r.no_bytes);
+    printf("rs: %u, %u\n", host->rem_s.no_bytes, host->rem_s.no_bytes);
+    printf("rr: %u, %u\n", host->rem_r.no_bytes, host->rem_r.no_bytes);
+    printf("lr: %u, %u\n", LStat.r.no_bytes, LStat.r.no_msgs);
+    printf("ls: %u, %u\n", LStat.s.no_bytes, LStat.s.no_msgs);
 }
 
 

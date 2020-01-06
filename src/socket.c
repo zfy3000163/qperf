@@ -38,10 +38,36 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <sched.h>
+#include <stdio.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/wait.h>
+#include <sys/ioctl.h>
+#include <sys/times.h>
+#include <sys/select.h>
+#include <sys/utsname.h>
 #include "qperf.h"
 
-extern int bw_listenFD;
-extern uint32_t bw_port;
+int bw_listenFD;
+int bw_acceptFD;
+uint32_t bw_port;
+
+#define MAX_EVENTS 512
+struct epoll_event ev_tcp_bw;
+struct epoll_event events_tcp_bw[MAX_EVENTS];
+int epfd_tcp_bw;
+
+
 
 /*
  * Parameters.
@@ -292,6 +318,120 @@ stream_client_bw(KIND kind)
     show_results(BANDWIDTH);
 }
 
+int bw_stemp = 0;
+int stream_server_bw_loop(void *arg)
+{
+    char *buf = 0;
+    int nevents = ff_epoll_wait(epfd_tcp_bw,  events_tcp_bw, 1, 0);
+    int i, iret;
+    if (nevents <= 0){
+        return;
+    }
+    else if (nevents > 0){
+	//printf("nevents:%d\n", nevents);
+        ;
+       
+    }
+
+    for (i = 0; i < nevents; ++i) {
+        if (events_tcp_bw[i].data.fd == bw_listenFD) {
+            while (1) {
+               iret = ff_accept(bw_listenFD, 0, 0);
+               //printf("***************child ready for requests:acceptfd:%d\n", iret);
+               if (iret < 0){
+                    printf("ff_accept failed:%d, %s\n", errno,
+                        strerror(errno));
+                   break;
+               }
+               bw_stemp = 0;
+               bw_acceptFD = iret;
+               set_socket_buffer_size(bw_acceptFD);
+               //close(bw_listenFD);
+
+                /* Add to event list */
+                ev_tcp_bw.data.fd = bw_acceptFD;
+                ev_tcp_bw.events  = EPOLLIN;
+                if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_ADD, bw_acceptFD, &ev_tcp_bw) != 0) {
+                    printf("ff_epoll_ctl failed:%d, %s\n", errno,
+                        strerror(errno));
+                    break;
+                }
+            }
+        }
+        else { 
+            if (events_tcp_bw[i].events & EPOLLERR ) {
+                /* Simply close socket */
+                printf("child link is close\n");
+                ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_DEL,  events_tcp_bw[i].data.fd, NULL);
+                ff_close(events_tcp_bw[i].data.fd);
+            } else if (events_tcp_bw[i].events & EPOLLIN) {
+              
+
+                //printf("children read...:%d, Finished: %d\n", Req.msg_size, Finished);
+                //remotefd_setup();
+                size_t n;
+                bw_stemp++;
+                //buf = qmalloc(Req.msg_size);
+                char pbuf[66560];
+                memset(&pbuf, 0x0, 66560);
+                char *buf = pbuf;
+
+                if(bw_stemp == 1){
+                    sync_test();
+                    n = ff_read(events_tcp_bw[i].data.fd, &buf, Req.msg_size);
+                    printf("child n:%d\n", n);
+                } 
+                else{
+                
+                
+                    while (!Finished) {
+                        //printf("while Finished:%d, %d\n", events_tcp_bw[i].data.fd, Req.msg_size);
+                        //int n = recv_full(bw_acceptFD, buf, Req.msg_size);
+                        
+                        //int n = ff_read(bw_acceptFD, buf, Req.msg_size);
+                        n = ff_read(events_tcp_bw[i].data.fd, &buf, Req.msg_size);
+                        //printf("child n:%d\n", n);
+
+                        if (Finished){
+                            stop_test_timer();
+                            exchange_results();
+                            //free(buf);
+                            if (bw_acceptFD >= 0)
+                                close(bw_acceptFD);
+
+                            printf("child finished break\n");
+                            break;
+                        }
+                        if (n < 0) {
+                            LStat.r.no_errs++;
+                            //printf("child n < 0, break\n");
+                            break;
+                        }
+#if 1
+                        LStat.r.no_bytes += n;
+                        LStat.r.no_msgs++;
+                        if (Req.access_recv)
+                            touch_data(buf, Req.msg_size);
+#endif
+                    }
+                    /* stop_test_timer();
+                       exchange_results();
+                       free(buf);
+                       if (bw_acceptFD >= 0)
+                       close(bw_acceptFD);
+                       */
+                }
+
+            } else {
+                printf("unknown event: %8.8X\n", events_tcp_bw[i].events);
+                return -1;
+            }
+        }
+    }
+
+    return 0;
+
+}
 
 /*
  * Measure stream bandwidth (server side).
@@ -303,6 +443,16 @@ stream_server_bw(KIND kind)
     char *buf = 0;
     printf("bw in\n");
     stream_server_init(&sockFD, kind);
+    //memset(&LStat, 0x0, sizeof(STAT));
+    printf("server_bw lr:%d, %d\n", LStat.r.no_bytes, LStat.r.no_msgs);
+#if 0
+    *fd = accept(listenFD, 0, 0);
+    if (*fd < 0)
+        error(SYS, "accept failed");
+    debug("accepted %s connection", kind_name(kind));
+    set_socket_buffer_size(*fd);
+    close(listenFD);
+    debug("receiving to %s port %d", kind_name(kind), port);
 
     sync_test();
     buf = qmalloc(Req.msg_size);
@@ -326,6 +476,7 @@ stream_server_bw(KIND kind)
     free(buf);
     if (sockFD >= 0)
         close(sockFD);
+#endif
 }
 
 
@@ -620,16 +771,34 @@ stream_server_init(int *fd, KIND kind)
 #if 1
     uint32_t port;
     AI *ai;
-    int bw_listenFD = -1;
 
+    char ip[46];
+    int ipbuf_len = 46;
+    memset(&ip, 0x0, 46);
+    char *ipbuf = ip;
     AI *ailist = getaddrinfo_kind(1, kind,  Req.port);
     for (ai = ailist; ai; ai = ai->ai_next) {
         if (!ai->ai_family)
             continue;
         bw_listenFD = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        printf("child Listen:%d, family:%d, socktype:%d, protocol:%d\n", bw_listenFD, ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (bw_listenFD < 0)
             continue;
         setsockopt_one(bw_listenFD, SO_REUSEADDR);
+
+    //int on = 1;
+    //ff_ioctl(bw_listenFD, FIONBIO, &on);
+
+    if (ai->ai_family == 0) {
+        struct sockaddr_in *sa = (struct sockaddr_in *)ai->ai_addr;
+        sa->sin_addr.s_addr = htonl(INADDR_ANY);
+        inet_ntop(AF_INET, &(sa->sin_addr), ipbuf, ipbuf_len);
+    } else {
+        struct sockaddr_in6 *sa = (struct sockaddr_in6 *)ai->ai_addr;
+        inet_ntop(AF_INET6, &(sa->sin6_addr), ipbuf, ipbuf_len);
+    }
+        printf("%d,%s\n", ipbuf_len, ipbuf);
+
         if (bind(bw_listenFD, ai->ai_addr, ai->ai_addrlen) == SUCCESS0)
             break;
         close(bw_listenFD);
@@ -644,9 +813,14 @@ stream_server_init(int *fd, KIND kind)
     get_socket_port(bw_listenFD, &port);
     encode_uint32(&port, port);
 
-    //send_mesg(&port, sizeof(port), "port");
+    send_mesg(&port, sizeof(port), "port");
     
     bw_port = port;
+
+    assert((epfd_tcp_bw = ff_epoll_create(0)) > 0);
+    ev_tcp_bw.data.fd = bw_listenFD;
+    ev_tcp_bw.events = EPOLLIN;
+    ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_ADD, bw_listenFD, &ev_tcp_bw);
 
 #if 0
     *fd = accept(listenFD, 0, 0);
@@ -762,6 +936,7 @@ getaddrinfo_kind(int serverflag, KIND kind, int port)
         .ai_family   = AF_UNSPEC,
         .ai_socktype = SOCK_STREAM
     };
+    memset(&hints, 0x0, sizeof(AI));
 
     if (serverflag)
         hints.ai_flags |= AI_PASSIVE;
@@ -835,7 +1010,7 @@ send_full(int fd, void *ptr, int len)
     int n = len;
 
     while (!Finished && n) {
-        int i = write(fd, ptr, n);
+        int i = ff_write(fd, ptr, n);
 
         if (i < 0)
             return i;
@@ -858,8 +1033,8 @@ recv_full(int fd, void *ptr, int len)
     int n = len;
 
     while (!Finished && n) {
-        int i = read(fd, ptr, n);
-
+        int i = ff_read(fd, ptr, n);
+        printf("child readd i:%d\n",i);
         if (i < 0)
             return i;
         ptr += i;
