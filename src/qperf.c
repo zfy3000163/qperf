@@ -1386,16 +1386,6 @@ server(void * arg)
             while (1) {
                printf("ready for requests\n");
 
-               /*socklen_t clientLen;
-               struct sockaddr_in clientAddr;
-               clientLen = sizeof(clientAddr);
-               RemoteFD = ff_accept(ListenFD, (struct sockaddr *)&clientAddr, &clientLen);
-               //RemoteFD = ff_accept(ListenFD, NULL, NULL);
-               if(RemoteFD < 0){
-		    break;
-               }
-               printf("remoteFD:%d\n", RemoteFD);
-               */
                //if (!server_recv_request())
                iret = server_recv_request();
                printf("request iret:%d\n", iret);
@@ -1426,11 +1416,11 @@ server(void * arg)
                 ff_close(events[i].data.fd);
             } else if (events[i].events & EPOLLIN) {
               
+                bw_step++;
 
-                //printf("read...\n");
+                //printf("read...:%d\n", bw_step);
                 //remotefd_setup();
 
-                bw_step++;
                 if(bw_step == 1){
                     iret = recv_mesg(&req, s, "request version");
                     printf("recv iret:%d\n", iret);
@@ -1755,10 +1745,10 @@ exchange_results(void)
     } else {
         enc_init(&stat);
         enc_stat(&LStat);
-        //printf("%d, %d\n", stat.s.no_bytes, stat.s.no_msgs);
-        //printf("%d, %d\n", stat.r.no_bytes, stat.r.no_msgs);
-        //printf("%d, %d\n", stat.rem_s.no_bytes, stat.rem_s.no_msgs);
-        //printf("%d, %d\n", stat.rem_r.no_bytes, stat.rem_r.no_msgs);
+        printf("send %d, %d\n", stat.s.no_bytes, stat.s.no_msgs);
+        printf("send %d, %d\n", stat.r.no_bytes, stat.r.no_msgs);
+        printf("send %d, %d\n", stat.rem_s.no_bytes, stat.rem_s.no_msgs);
+        printf("send %d, %d\n", stat.rem_r.no_bytes, stat.rem_r.no_msgs);
         send_mesg(&stat, sizeof(stat), "results");
         //recv_sync("synchronization after test");
     }

@@ -261,13 +261,14 @@ recv_sync(char *msg)
     printf("********************\n");
     char data[64];
     int n = strlen(msg);
-    if (n > sizeof(data))
-        ;
-        //error(BUG, "buffer in recv_sync() too small");
+    if (n > sizeof(data)){
+        printf("buffer in recv_sync() too small\n");
+        return 1;
+    }
     int iret = recv_mesg(data, n, msg);
     printf("iret:%d, data:%s, msg:%s, n:%d\n", iret, data, msg, n);
     if (memcmp(data, msg, n) != 0){
-        printf("synchronize %s failure: data does not match", msg);
+        printf("synchronize %s failure: data does not match\n", msg);
         return 1;
     }
     return 0;

@@ -318,7 +318,6 @@ stream_client_bw(KIND kind)
     show_results(BANDWIDTH);
 }
 
-int bw_stemp = 0;
 int stream_server_bw_loop(void *arg)
 {
     char *buf = 0;
@@ -341,7 +340,6 @@ int stream_server_bw_loop(void *arg)
                    close(bw_listenFD);
                    break;
                }
-               bw_stemp = 0;
                bw_acceptFD = iret;
                set_socket_buffer_size(bw_acceptFD);
 
@@ -367,67 +365,30 @@ int stream_server_bw_loop(void *arg)
                 //printf("children read...:%d, Finished: %d\n", Req.msg_size, Finished);
                 //remotefd_setup();
                 int n = 0;
-                bw_stemp++;
                 //buf = qmalloc(Req.msg_size);
-                char pbuf[66560];
-                memset(&pbuf, 0x0, 66560);
+                char pbuf[Req.msg_size];
+                memset(&pbuf, 0x0, Req.msg_size);
                 char *buf = pbuf;
 
-                if(bw_stemp == 1){
-                    sync_test();
-                } 
-                else{
-                
-                
-                    while (!Finished) {
-                        //printf("while Finished:%d, %d\n", events_tcp_bw[i].data.fd, Req.msg_size);
-                        //n = recv_full(bw_acceptFD, buf, 66560);
-                        
-                        //int n = ff_read(bw_acceptFD, buf, Req.msg_size);
-                        n = ff_read(bw_acceptFD, buf, 66560);
-                        if (n == 0)
-                            printf("*******************child n:%d, %d\n", n, Finished);
+                n = ff_read(bw_acceptFD, buf, Req.msg_size);
 
-                        /* if(LStat.r.no_msgs >= 19137)
-                        {
-                            printf("quit\n"); 
-                            stop_test_timer();
-                            exchange_results();
-                            //free(buf);
-                            if (bw_acceptFD >= 0)
-                                close(bw_acceptFD);
-                        }
-                        */
-
-                        if (Finished){
-                            printf("child finished break:%d, bw_stemp:%d\n", Finished, bw_stemp);
-                            stop_test_timer();
-                            exchange_results();
-                            //free(buf);
-                            if (bw_acceptFD >= 0)
-                                close(bw_acceptFD);
-
-                            break;
-                        }
-                        if (n < 0) {
-                            LStat.r.no_errs++;
-                            //printf("child n < 0, break\n");
-                            break;
-                        }
-#if 1
-                        LStat.r.no_bytes += n;
-                        LStat.r.no_msgs++;
-                        if (Req.access_recv)
-                            touch_data(buf, Req.msg_size);
-#endif
-                    }
-                    /* stop_test_timer();
-                       exchange_results();
-                       free(buf);
-                       if (bw_acceptFD >= 0)
-                       close(bw_acceptFD);
-                       */
+                if (Finished){
+                    printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
+                    stop_test_timer();
+                    exchange_results();
+                    //free(buf);
+                    if (bw_acceptFD >= 0)
+                        close(bw_acceptFD);
+                    break;
                 }
+                if (n < 0) {
+                    LStat.r.no_errs++;
+                    break;
+                }
+                LStat.r.no_bytes += n;
+                LStat.r.no_msgs++;
+                if (Req.access_recv)
+                    touch_data(buf, Req.msg_size);
 
             } else {
                 printf("unknown event: %8.8X\n", events_tcp_bw[i].events);
@@ -1042,8 +1003,7 @@ recv_full(int fd, void *ptr, int len)
     int iret = 0;
 
     while (!Finished && n) {
-        //i = ff_read(fd, ptr, n);
-        i = ff_read(fd, ptr, len);
+        i = ff_read(fd, ptr, n);
         if(i >0){
            printf("i:%d, n:%d\n", i, n);
            iret += i;
