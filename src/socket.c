@@ -409,10 +409,7 @@ stream_server_bw(KIND kind)
 {
     int sockFD = -1;
     char *buf = 0;
-    printf("bw in\n");
     stream_server_init(&sockFD, kind);
-    //memset(&LStat, 0x0, sizeof(STAT));
-    printf("server_bw lr:%d, %d\n", LStat.r.no_bytes, LStat.r.no_msgs);
 #if 0
     *fd = accept(listenFD, 0, 0);
     if (*fd < 0)
