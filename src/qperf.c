@@ -1362,7 +1362,7 @@ static int qperf_loop(void *arg)
     stream_server_bw_loop(arg);
 }
 
-int bw_step = 0;
+int qperf_step = 0;
 /*
  * Server.
  */
@@ -1397,7 +1397,7 @@ server(void * arg)
 	       }
                
 
-                bw_step = 0;
+                qperf_step = 0;
                 /* Add to event list */
                 ev.data.fd = RemoteFD;
                 ev.events  = EPOLLIN;
@@ -1416,12 +1416,12 @@ server(void * arg)
                 ff_close(events[i].data.fd);
             } else if (events[i].events & EPOLLIN) {
               
-                bw_step++;
+                qperf_step++;
 
-                //printf("read...:%d\n", bw_step);
+                //printf("read...:%d\n", qperf_step);
                 //remotefd_setup();
 
-                if(bw_step == 1){
+                if(qperf_step == 1){
                     iret = recv_mesg(&req, s, "request version");
                     printf("recv iret:%d\n", iret);
                     dec_init(&req);
@@ -1440,9 +1440,9 @@ server(void * arg)
                     set_affinity();
                     (test->server)();
                 }
-                else if(bw_step == 2){
+                else if(qperf_step == 2){
                     sync_test();
-                    printf("main step:%d\n", bw_step);
+                    printf("main step:%d\n", qperf_step);
                     iret = recv_sync("synchronization before test"); 
                     if(iret){
                         printf("error qperf close listenfd\n");
@@ -1451,8 +1451,8 @@ server(void * arg)
                     }
 
                 }
-                else if (bw_step == 3){
-                    printf("main step:%d\n", bw_step);
+                else if (qperf_step == 3){
+                    printf("main step:%d\n", qperf_step);
                     printf("received request: %s, %u, %u", TestName, LStat.r.no_bytes, LStat.r.no_msgs);
                     iret = recv_sync("synchronization after test"); 
                     if(iret){
@@ -1460,6 +1460,11 @@ server(void * arg)
                         ff_epoll_ctl(epfd, EPOLL_CTL_DEL,  events[i].data.fd, NULL);
                         ff_close(events[i].data.fd);
                     }
+                    else{
+                        ff_epoll_ctl(epfd, EPOLL_CTL_DEL,  events[i].data.fd, NULL);
+                        ff_close(events[i].data.fd);
+                    }
+
                 }
             } else {
                 printf("unknown event: %8.8X\n", events[i].events);
