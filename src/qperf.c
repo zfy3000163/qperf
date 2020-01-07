@@ -1373,7 +1373,8 @@ server(void * arg)
     int nevents = ff_epoll_wait(epfd,  events, MAX_EVENTS, 0);
     int i, iret;
     if (nevents != 0)
-	printf("nevents:%d\n", nevents);
+	;
+        //printf("nevents:%d\n", nevents);
 
     for (i = 0; i < nevents; ++i) {
         REQ req;
@@ -1426,7 +1427,7 @@ server(void * arg)
             } else if (events[i].events & EPOLLIN) {
               
 
-                printf("read...\n");
+                //printf("read...\n");
                 //remotefd_setup();
 
                 bw_step++;
@@ -1451,11 +1452,24 @@ server(void * arg)
                 }
                 else if(bw_step == 2){
                     sync_test();
-                    recv_sync("synchronization before test"); 
+                    printf("main step:%d\n", bw_step);
+                    iret = recv_sync("synchronization before test"); 
+                    if(iret){
+                        printf("error qperf close listenfd\n");
+                        ff_epoll_ctl(epfd, EPOLL_CTL_DEL,  events[i].data.fd, NULL);
+                        ff_close(events[i].data.fd);
+                    }
 
                 }
                 else if (bw_step == 3){
-                    recv_sync("synchronization after test"); 
+                    printf("main step:%d\n", bw_step);
+                    printf("received request: %s, %u, %u", TestName, LStat.r.no_bytes, LStat.r.no_msgs);
+                    iret = recv_sync("synchronization after test"); 
+                    if(iret){
+                        printf("error qperf close listenfd\n");
+                        ff_epoll_ctl(epfd, EPOLL_CTL_DEL,  events[i].data.fd, NULL);
+                        ff_close(events[i].data.fd);
+                    }
                 }
             } else {
                 printf("unknown event: %8.8X\n", events[i].events);

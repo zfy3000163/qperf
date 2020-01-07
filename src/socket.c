@@ -324,10 +324,7 @@ int stream_server_bw_loop(void *arg)
     char *buf = 0;
     int nevents = ff_epoll_wait(epfd_tcp_bw,  events_tcp_bw, 1, 0);
     int i, iret;
-    if (nevents <= 0){
-        return;
-    }
-    else if (nevents > 0){
+    if (nevents > 0){
 	//printf("nevents:%d\n", nevents);
         ;
        
@@ -341,12 +338,12 @@ int stream_server_bw_loop(void *arg)
                if (iret < 0){
                     printf("ff_accept failed:%d, %s\n", errno,
                         strerror(errno));
+                   close(bw_listenFD);
                    break;
                }
                bw_stemp = 0;
                bw_acceptFD = iret;
                set_socket_buffer_size(bw_acceptFD);
-               //close(bw_listenFD);
 
                 /* Add to event list */
                 ev_tcp_bw.data.fd = bw_acceptFD;
@@ -369,7 +366,7 @@ int stream_server_bw_loop(void *arg)
 
                 //printf("children read...:%d, Finished: %d\n", Req.msg_size, Finished);
                 //remotefd_setup();
-                size_t n;
+                int n = 0;
                 bw_stemp++;
                 //buf = qmalloc(Req.msg_size);
                 char pbuf[66560];
@@ -378,28 +375,38 @@ int stream_server_bw_loop(void *arg)
 
                 if(bw_stemp == 1){
                     sync_test();
-                    n = ff_read(events_tcp_bw[i].data.fd, &buf, Req.msg_size);
-                    printf("child n:%d\n", n);
                 } 
                 else{
                 
                 
                     while (!Finished) {
                         //printf("while Finished:%d, %d\n", events_tcp_bw[i].data.fd, Req.msg_size);
-                        //int n = recv_full(bw_acceptFD, buf, Req.msg_size);
+                        //n = recv_full(bw_acceptFD, buf, 66560);
                         
                         //int n = ff_read(bw_acceptFD, buf, Req.msg_size);
-                        n = ff_read(events_tcp_bw[i].data.fd, &buf, Req.msg_size);
-                        //printf("child n:%d\n", n);
+                        n = ff_read(bw_acceptFD, buf, 66560);
+                        if (n == 0)
+                            printf("*******************child n:%d, %d\n", n, Finished);
+
+                        /* if(LStat.r.no_msgs >= 19137)
+                        {
+                            printf("quit\n"); 
+                            stop_test_timer();
+                            exchange_results();
+                            //free(buf);
+                            if (bw_acceptFD >= 0)
+                                close(bw_acceptFD);
+                        }
+                        */
 
                         if (Finished){
+                            printf("child finished break:%d, bw_stemp:%d\n", Finished, bw_stemp);
                             stop_test_timer();
                             exchange_results();
                             //free(buf);
                             if (bw_acceptFD >= 0)
                                 close(bw_acceptFD);
 
-                            printf("child finished break\n");
                             break;
                         }
                         if (n < 0) {
@@ -786,8 +793,8 @@ stream_server_init(int *fd, KIND kind)
             continue;
         setsockopt_one(bw_listenFD, SO_REUSEADDR);
 
-    //int on = 1;
-    //ff_ioctl(bw_listenFD, FIONBIO, &on);
+    int on = 1;
+    ff_ioctl(bw_listenFD, FIONBIO, &on);
 
     if (ai->ai_family == 0) {
         struct sockaddr_in *sa = (struct sockaddr_in *)ai->ai_addr;
@@ -1031,12 +1038,20 @@ static int
 recv_full(int fd, void *ptr, int len)
 {
     int n = len;
+    int i=0;
+    int iret = 0;
 
     while (!Finished && n) {
-        int i = ff_read(fd, ptr, n);
-        printf("child readd i:%d\n",i);
-        if (i < 0)
-            return i;
+        //i = ff_read(fd, ptr, n);
+        i = ff_read(fd, ptr, len);
+        if(i >0){
+           printf("i:%d, n:%d\n", i, n);
+           iret += i;
+        }
+        if (i < 0){
+            //printf("return -1, break:%d\n", iret);
+            return iret;
+        }
         ptr += i;
         n   -= i;
         if (i == 0)

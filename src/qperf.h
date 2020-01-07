@@ -277,7 +277,7 @@ int         error(int actions, char *fmt, ...);
 AI         *getaddrinfo_port(char *node, int port, AI *hints);
 char       *qasprintf(char *fmt, ...);
 void       *qmalloc(long n);
-void        recv_sync(char *msg);
+int        recv_sync(char *msg);
 void        send_sync(char *msg);
 void        setsockopt_one(int fd, int optname);
 void        synchronize(char *msg);
