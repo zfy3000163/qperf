@@ -55,14 +55,11 @@
 
 
 
-
-
-
 #define MAX_EVENTS 512
 struct epoll_event ev;
 struct epoll_event events[MAX_EVENTS];
 int epfd;
-
+int qperf_accpet_step[1000000] = {0};
 
 /*
  * Configurable parameters.  If your change makes this version of qperf
@@ -1379,7 +1376,6 @@ static int qperf_server_loop(void *arg)
     stream_server_bw_loop(arg);
 }
 
-int qperf_step = 0;
 /*
  * Server.
  */
@@ -1414,7 +1410,7 @@ server(void * arg)
 	       }
                
 
-                qperf_step = 0;
+                qperf_accpet_step[RemoteFD] = 0;
                 /* Add to event list */
                 ev.data.fd = RemoteFD;
                 ev.events  = EPOLLIN;
@@ -1433,12 +1429,12 @@ server(void * arg)
                 ff_close(events[i].data.fd);
             } else if (events[i].events & EPOLLIN) {
               
-                qperf_step++;
+                qperf_accpet_step[events[i].data.fd]++;
 
-                //printf("read...:%d\n", qperf_step);
+                //printf("read...\n");
                 //remotefd_setup();
 
-                if(qperf_step == 1){
+                if(qperf_accpet_step[events[i].data.fd] == 1){
                     iret = recv_mesg(&req, s, "request version");
                     printf("recv iret:%d\n", iret);
                     dec_init(&req);
@@ -1457,9 +1453,9 @@ server(void * arg)
                     set_affinity();
                     (test->server)();
                 }
-                else if(qperf_step == 2){
+                else if(qperf_accpet_step[events[i].data.fd] == 2){
                     sync_test();
-                    printf("main step:%d\n", qperf_step);
+                    printf("main step:%d\n", qperf_accpet_step[events[i].data.fd]);
                     iret = recv_sync("synchronization before test"); 
                     if(iret){
                         printf("error qperf close listenfd\n");
@@ -1468,8 +1464,8 @@ server(void * arg)
                     }
 
                 }
-                else if (qperf_step == 3){
-                    printf("main step:%d\n", qperf_step);
+                else if (qperf_accpet_step[events[i].data.fd] == 3){
+                    printf("main step:%d\n", qperf_accpet_step[events[i].data.fd]);
                     iret = recv_sync("synchronization after test"); 
                     if(iret){
                         printf("error qperf close listenfd\n");
