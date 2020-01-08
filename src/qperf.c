@@ -250,7 +250,7 @@ static void      view_size(int type, char *pref, char *name, long long value);
 static void      view_strn(int type, char *pref, char *name, char *value);
 static void      view_time(int type, char *pref, char *name, double value);
 
-static int qperf_loop(void *arg);
+static int qperf_server_loop(void *arg);
 
 /*
  * Configurable variables.
@@ -611,9 +611,6 @@ TEST Tests[] ={
 int
 main(int argc, char *argv[])
 {
-    ff_init(argc, argv);
-    ff_mod_init();
-    //assert((epfd = ff_epoll_create(0)) > 0);
 
     initialize();
     set_signals();
@@ -755,6 +752,10 @@ do_args(char *args[])
             do_option(option, &args);
         } else {
             isClient = 1;
+
+            ff_init(0, NULL);
+            ff_mod_init();
+
             if (!ServerName)
                 ServerName = arg;
             else {
@@ -762,7 +763,10 @@ do_args(char *args[])
 
                 if (!test)
                     error(0, "%s: bad test; try: qperf --help tests", arg);
-                do_loop(Loops, test);
+
+                //do_loop(Loops, test);
+                //ff_run(qperf_client_loop, NULL);
+
                 testSpecified = 1;
             }
             ++args;
@@ -770,6 +774,10 @@ do_args(char *args[])
     }
 
     if (!isClient){
+
+        ff_init(0, NULL);
+        ff_mod_init();
+
         server_listen();
 
         assert((epfd = ff_epoll_create(0)) > 0);
@@ -779,7 +787,7 @@ do_args(char *args[])
 
 
         //server();
-        ff_run(qperf_loop, NULL);
+        ff_run(qperf_server_loop, NULL);
     }
     else if (!testSpecified) {
         if (!ServerName)
@@ -1355,7 +1363,16 @@ opt_check(void)
 }
 
 
-static int qperf_loop(void *arg)
+int ff_qperf_client_init(TEST *test)
+{
+    client(test);
+    
+    return 0;
+}
+
+
+
+static int qperf_server_loop(void *arg)
 {
 
     server(arg);
@@ -1435,7 +1452,7 @@ server(void * arg)
 
                     test = &Tests[Req.req_index];
                     TestName = test->name;
-                    printf("received request: %s, %u, %u", TestName, LStat.r.no_bytes, LStat.r.no_msgs);
+                    printf("received request: %s", TestName);
                     init_lstat();
                     set_affinity();
                     (test->server)();
@@ -1453,7 +1470,6 @@ server(void * arg)
                 }
                 else if (qperf_step == 3){
                     printf("main step:%d\n", qperf_step);
-                    printf("received request: %s, %u, %u", TestName, LStat.r.no_bytes, LStat.r.no_msgs);
                     iret = recv_sync("synchronization after test"); 
                     if(iret){
                         printf("error qperf close listenfd\n");
@@ -1513,12 +1529,10 @@ version_error(void)
 static void
 server_listen(void)
 {
-#if 1
     AI *ai;
     AI hints ={
         .ai_flags    = AI_PASSIVE | AI_NUMERICSERV,
         .ai_family   = AF_UNSPEC,
-        //.ai_family   = AF_INET,
         .ai_socktype = SOCK_STREAM
     };
     memset(&hints, 0x0, sizeof(AI));
@@ -1540,19 +1554,20 @@ server_listen(void)
         int iret = ff_ioctl(ListenFD, FIONBIO, &on);
         printf("FIONBIO iret:%d\n", iret);
 
-    if (ai->ai_family == AF_INET) {
-        struct sockaddr_in *sa = (struct sockaddr_in *)ai->ai_addr;
-        sa->sin_addr.s_addr = htonl(INADDR_ANY);
-        inet_ntop(AF_INET, &(sa->sin_addr), ipbuf, ipbuf_len);
-    } else {
-        struct sockaddr_in6 *sa = (struct sockaddr_in6 *)ai->ai_addr;
-        inet_ntop(AF_INET6, &(sa->sin6_addr), ipbuf, ipbuf_len);
-    }
+        if (ai->ai_family == AF_INET) {
+            struct sockaddr_in *sa = (struct sockaddr_in *)ai->ai_addr;
+            sa->sin_addr.s_addr = htonl(INADDR_ANY);
+            inet_ntop(AF_INET, &(sa->sin_addr), ipbuf, ipbuf_len);
+        } else {
+            struct sockaddr_in6 *sa = (struct sockaddr_in6 *)ai->ai_addr;
+            inet_ntop(AF_INET6, &(sa->sin6_addr), ipbuf, ipbuf_len);
+        }
         printf("%d,%s\n", ipbuf_len, ipbuf);
         if (bind(ListenFD, ai->ai_addr, ai->ai_addrlen) == SUCCESS0)
             break;
         close(ListenFD);
     }
+
     freeaddrinfo(ailist);
     if (!ai)
         error(0, "unable to bind to listen port");
@@ -1561,40 +1576,7 @@ server_listen(void)
         Req.timeout = DEF_TIMEOUT;
     if (listen(ListenFD, MAX_EVENTS) < 0)
         error(SYS, "listen failed");
-#else
-    int sockfd;
-    sockfd = ff_socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        printf("ff_socket failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
-        exit(1);
-    }
 
-    int on = 1;
-    int iret = ff_ioctl(sockfd, FIONBIO, &on);
-    printf("FIONBIO iret:%d\n", iret);
-
-    struct sockaddr_in my_addr;
-    bzero(&my_addr, sizeof(my_addr));
-    my_addr.sin_family = AF_INET;
-    my_addr.sin_port = htons(19765);
-    my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-    int ret = ff_bind(sockfd, (struct linux_sockaddr*)&my_addr, sizeof(my_addr));
-    if (ret < 0) {
-        printf("ff_bind failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
-        exit(1);
-    }
-
-     ret = ff_listen(sockfd, MAX_EVENTS);
-    if (ret < 0) {
-        printf("ff_listen failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
-        exit(1);
-    }
-    ListenFD = sockfd;
-
-
-
-#endif
 }
 
 
@@ -1750,10 +1732,6 @@ exchange_results(void)
     } else {
         enc_init(&stat);
         enc_stat(&LStat);
-        printf("send %d, %d\n", stat.s.no_bytes, stat.s.no_msgs);
-        printf("send %d, %d\n", stat.r.no_bytes, stat.r.no_msgs);
-        printf("send %d, %d\n", stat.rem_s.no_bytes, stat.rem_s.no_msgs);
-        printf("send %d, %d\n", stat.rem_r.no_bytes, stat.rem_r.no_msgs);
         send_mesg(&stat, sizeof(stat), "results");
         //recv_sync("synchronization after test");
     }
@@ -1766,8 +1744,6 @@ exchange_results(void)
 static void
 init_lstat(void)
 {
-    printf("IStat:%d, %d\n", IStat.r.no_bytes, IStat.r.no_msgs);
-    printf("IStat:%d, %d\n", IStat.s.no_bytes, IStat.s.no_msgs);
     memcpy(&LStat, &IStat, sizeof(LStat));
 }
 
@@ -2885,12 +2861,6 @@ enc_stat(STAT *host)
     enc_ustat(&host->r);
     enc_ustat(&host->rem_s);
     enc_ustat(&host->rem_r);
-    printf("s: %u, %u\n", host->s.no_bytes, host->s.no_bytes);
-    printf("r: %u, %u\n", host->r.no_bytes, host->r.no_bytes);
-    printf("rs: %u, %u\n", host->rem_s.no_bytes, host->rem_s.no_bytes);
-    printf("rr: %u, %u\n", host->rem_r.no_bytes, host->rem_r.no_bytes);
-    printf("lr: %u, %u\n", LStat.r.no_bytes, LStat.r.no_msgs);
-    printf("ls: %u, %u\n", LStat.s.no_bytes, LStat.s.no_msgs);
 }
 
 

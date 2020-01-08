@@ -36,6 +36,7 @@
 #include <errno.h>
 #include <netdb.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -58,9 +59,7 @@
 #include <sys/utsname.h>
 #include "qperf.h"
 
-int bw_listenFD;
-int bw_acceptFD;
-uint32_t bw_port;
+uint32_t array_listenfd[1000000] = {0};
 
 #define MAX_EVENTS 512
 struct epoll_event ev_tcp_bw;
@@ -297,6 +296,7 @@ stream_client_bw(KIND kind)
     int sockFD;
 
     client_init(&sockFD, kind);
+#if 0
     buf = qmalloc(Req.msg_size);
     sync_test();
     while (!Finished) {
@@ -316,13 +316,15 @@ stream_client_bw(KIND kind)
     free(buf);
     close(sockFD);
     show_results(BANDWIDTH);
+#endif
 }
 
-int stream_server_bw_loop(void *arg)
+/*Client*/
+int stream_client_bw_loop(void *arg)
 {
     char *buf = 0;
     int nevents = ff_epoll_wait(epfd_tcp_bw,  events_tcp_bw, 1, 0);
-    int i, iret;
+    int i, iret, listenfd = -1, acceptfd = -1;
     if (nevents > 0){
 	//printf("nevents:%d\n", nevents);
         ;
@@ -330,23 +332,25 @@ int stream_server_bw_loop(void *arg)
     }
 
     for (i = 0; i < nevents; ++i) {
-        if (events_tcp_bw[i].data.fd == bw_listenFD) {
+        listenfd = -1;
+        listenfd = events_tcp_bw[i].data.fd;
+        if (listenfd == array_listenfd[listenfd]) {
             while (1) {
-               iret = ff_accept(bw_listenFD, 0, 0);
+               iret = ff_accept(listenfd, 0, 0);
                //printf("***************child ready for requests:acceptfd:%d\n", iret);
                if (iret < 0){
                     printf("ff_accept failed:%d, %s\n", errno,
                         strerror(errno));
-                   close(bw_listenFD);
+                   close(listenfd);
                    break;
                }
-               bw_acceptFD = iret;
-               set_socket_buffer_size(bw_acceptFD);
+               acceptfd = iret;
+               set_socket_buffer_size(acceptfd);
 
                 /* Add to event list */
-                ev_tcp_bw.data.fd = bw_acceptFD;
+                ev_tcp_bw.data.fd = acceptfd;
                 ev_tcp_bw.events  = EPOLLIN;
-                if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_ADD, bw_acceptFD, &ev_tcp_bw) != 0) {
+                if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_ADD, acceptfd, &ev_tcp_bw) != 0) {
                     printf("ff_epoll_ctl failed:%d, %s\n", errno,
                         strerror(errno));
                     break;
@@ -370,15 +374,104 @@ int stream_server_bw_loop(void *arg)
                 memset(&pbuf, 0x0, Req.msg_size);
                 char *buf = pbuf;
 
-                n = ff_read(bw_acceptFD, buf, Req.msg_size);
+                n = ff_read(events_tcp_bw[i].data.fd, buf, Req.msg_size);
 
                 if (Finished){
                     printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
                     stop_test_timer();
                     exchange_results();
                     //free(buf);
-                    if (bw_acceptFD >= 0)
-                        close(bw_acceptFD);
+                    if (events_tcp_bw[i].data.fd >= 0)
+                        close(events_tcp_bw[i].data.fd);
+
+                    break;
+                }
+                if (n < 0) {
+                    LStat.r.no_errs++;
+                    break;
+                }
+                LStat.r.no_bytes += n;
+                LStat.r.no_msgs++;
+                if (Req.access_recv)
+                    touch_data(buf, Req.msg_size);
+
+            } else {
+                printf("unknown event: %8.8X\n", events_tcp_bw[i].events);
+                return -1;
+            }
+        }
+    }
+
+    return 0;
+
+}
+
+
+
+/*Server*/
+int stream_server_bw_loop(void *arg)
+{
+    char *buf = 0;
+    int nevents = ff_epoll_wait(epfd_tcp_bw,  events_tcp_bw, 1, 0);
+    int i, iret, listenfd = -1, acceptfd = -1;
+    if (nevents > 0){
+	//printf("nevents:%d\n", nevents);
+        ;
+       
+    }
+
+    for (i = 0; i < nevents; ++i) {
+        listenfd = -1;
+        listenfd = events_tcp_bw[i].data.fd;
+        if (listenfd == array_listenfd[listenfd]) {
+            while (1) {
+               iret = ff_accept(listenfd, 0, 0);
+               //printf("***************child ready for requests:acceptfd:%d\n", iret);
+               if (iret < 0){
+                    printf("ff_accept failed:%d, %s\n", errno,
+                        strerror(errno));
+                   close(listenfd);
+                   break;
+               }
+               acceptfd = iret;
+               set_socket_buffer_size(acceptfd);
+
+                /* Add to event list */
+                ev_tcp_bw.data.fd = acceptfd;
+                ev_tcp_bw.events  = EPOLLIN;
+                if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_ADD, acceptfd, &ev_tcp_bw) != 0) {
+                    printf("ff_epoll_ctl failed:%d, %s\n", errno,
+                        strerror(errno));
+                    break;
+                }
+            }
+        }
+        else { 
+            if (events_tcp_bw[i].events & EPOLLERR ) {
+                /* Simply close socket */
+                printf("child link is close\n");
+                ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_DEL,  events_tcp_bw[i].data.fd, NULL);
+                ff_close(events_tcp_bw[i].data.fd);
+            } else if (events_tcp_bw[i].events & EPOLLIN) {
+              
+
+                //printf("children read...:%d, Finished: %d\n", Req.msg_size, Finished);
+                //remotefd_setup();
+                int n = 0;
+                //buf = qmalloc(Req.msg_size);
+                char pbuf[Req.msg_size];
+                memset(&pbuf, 0x0, Req.msg_size);
+                char *buf = pbuf;
+
+                n = ff_read(events_tcp_bw[i].data.fd, buf, Req.msg_size);
+
+                if (Finished){
+                    printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
+                    stop_test_timer();
+                    exchange_results();
+                    //free(buf);
+                    if (events_tcp_bw[i].data.fd >= 0)
+                        close(events_tcp_bw[i].data.fd);
                     break;
                 }
                 if (n < 0) {
@@ -408,9 +501,11 @@ static void
 stream_server_bw(KIND kind)
 {
     int sockFD = -1;
-    char *buf = 0;
     stream_server_init(&sockFD, kind);
+    array_listenfd[sockFD] = sockFD;
+
 #if 0
+    char *buf = 0;
     *fd = accept(listenFD, 0, 0);
     if (*fd < 0)
         error(SYS, "accept failed");
@@ -442,6 +537,7 @@ stream_server_bw(KIND kind)
     if (sockFD >= 0)
         close(sockFD);
 #endif
+
 }
 
 
@@ -704,6 +800,7 @@ client_init(int *fd, KIND kind)
     AI *ai, *ailist;
 
     client_send_request();
+
     recv_mesg(&rport, sizeof(rport), "port");
     rport = decode_uint32(&rport);
     ailist = getaddrinfo_kind(0, kind, rport);
@@ -733,7 +830,6 @@ client_init(int *fd, KIND kind)
 static void
 stream_server_init(int *fd, KIND kind)
 {
-#if 1
     uint32_t port;
     AI *ai;
 
@@ -745,110 +841,58 @@ stream_server_init(int *fd, KIND kind)
     for (ai = ailist; ai; ai = ai->ai_next) {
         if (!ai->ai_family)
             continue;
-        bw_listenFD = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        printf("child Listen:%d, family:%d, socktype:%d, protocol:%d\n", bw_listenFD, ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (bw_listenFD < 0)
+        *fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        printf("child Listen:%d, family:%d, socktype:%d, protocol:%d\n", *fd, ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (*fd < 0)
             continue;
-        setsockopt_one(bw_listenFD, SO_REUSEADDR);
+        setsockopt_one(*fd, SO_REUSEADDR);
 
-    int on = 1;
-    ff_ioctl(bw_listenFD, FIONBIO, &on);
+        int on = 1;
+        ff_ioctl(*fd, FIONBIO, &on);
 
-    if (ai->ai_family == 0) {
-        struct sockaddr_in *sa = (struct sockaddr_in *)ai->ai_addr;
-        sa->sin_addr.s_addr = htonl(INADDR_ANY);
-        inet_ntop(AF_INET, &(sa->sin_addr), ipbuf, ipbuf_len);
-    } else {
-        struct sockaddr_in6 *sa = (struct sockaddr_in6 *)ai->ai_addr;
-        inet_ntop(AF_INET6, &(sa->sin6_addr), ipbuf, ipbuf_len);
-    }
+        if (ai->ai_family == 0) {
+            struct sockaddr_in *sa = (struct sockaddr_in *)ai->ai_addr;
+            sa->sin_addr.s_addr = htonl(INADDR_ANY);
+            inet_ntop(AF_INET, &(sa->sin_addr), ipbuf, ipbuf_len);
+        } else {
+            struct sockaddr_in6 *sa = (struct sockaddr_in6 *)ai->ai_addr;
+            inet_ntop(AF_INET6, &(sa->sin6_addr), ipbuf, ipbuf_len);
+        }
         printf("%d,%s\n", ipbuf_len, ipbuf);
 
-        if (bind(bw_listenFD, ai->ai_addr, ai->ai_addrlen) == SUCCESS0)
+        if (bind(*fd, ai->ai_addr, ai->ai_addrlen) == SUCCESS0)
             break;
-        close(bw_listenFD);
-        bw_listenFD = -1;
+        close(*fd);
+        *fd = -1;
     }
+
     freeaddrinfo(ailist);
     if (!ai)
         error(0, "unable to make %s socket", kind_name(kind));
-    if (listen(bw_listenFD, 1) < 0)
+    if (listen(*fd, 1) < 0)
         error(SYS, "listen failed");
 
-    get_socket_port(bw_listenFD, &port);
+
+    get_socket_port(*fd, &port);
     encode_uint32(&port, port);
 
     send_mesg(&port, sizeof(port), "port");
     
-    bw_port = port;
-
     assert((epfd_tcp_bw = ff_epoll_create(0)) > 0);
-    ev_tcp_bw.data.fd = bw_listenFD;
+    ev_tcp_bw.data.fd = *fd;
     ev_tcp_bw.events = EPOLLIN;
-    ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_ADD, bw_listenFD, &ev_tcp_bw);
+    ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_ADD, *fd, &ev_tcp_bw);
 
 #if 0
-    *fd = accept(listenFD, 0, 0);
+    *fd = accept(*fd, 0, 0);
     if (*fd < 0)
         error(SYS, "accept failed");
     debug("accepted %s connection", kind_name(kind));
     set_socket_buffer_size(*fd);
-    close(listenFD);
+    close(*fd);
     debug("receiving to %s port %d", kind_name(kind), port);
 #endif
     
-#else
-    uint32_t port;
-    int listenFD = -1;
-
-    int sockfd;
-    printf("Req.port:%d\n", Req.port);
-    sockfd = ff_socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        printf("ff_socket failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
-        exit(1);
-    }
-
-    struct sockaddr_in my_addr;
-    bzero(&my_addr, sizeof(my_addr));
-    my_addr.sin_family = AF_INET;
-    my_addr.sin_port = htons(Req.port);
-    my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-    setsockopt_one(sockfd, SO_REUSEADDR);
-    int ret = ff_bind(sockfd, &my_addr, sizeof(my_addr));
-    if (ret < 0) {
-        printf("ff_bind failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
-        exit(1);
-    }
-
-    ret = ff_listen(sockfd, 1);
-    if (ret < 0) {
-        printf("ff_listen failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
-        exit(1);
-    }
-    listenFD = sockfd;
-
-    get_socket_port(listenFD, &port);
-    encode_uint32(&port, port);
-    send_mesg(&port, sizeof(port), "port");
-
-    socklen_t clientLen;
-    struct sockaddr_in clientAddr;
-    clientLen = sizeof(clientAddr);
-    *fd= ff_accept(listenFD, (struct sockaddr *)&clientAddr, &clientLen);
-
-    //*fd = ff_accept(listenFD, 0, 0);
-    printf("*fd:%d\n", *fd);
-    if (*fd < 0)
-        error(SYS, "accept failed");
-    debug("accepted %s connection", kind_name(kind));
-    set_socket_buffer_size(*fd);
-    ff_close(listenFD);
-    debug("receiving to %s port %d", kind_name(kind), port);
-
-
-#endif
 
 }
 
