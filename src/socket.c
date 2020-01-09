@@ -59,7 +59,7 @@
 #include <sys/utsname.h>
 #include "qperf.h"
 
-uint32_t array_listenfd[1000000] = {0};
+static uint32_t array_listenfd[1000000] = {0};
 
 #define MAX_EVENTS 512
 struct epoll_event ev_tcp_bw;
@@ -295,8 +295,12 @@ stream_client_bw(KIND kind)
     char *buf;
     int sockFD;
 
-    client_init(&sockFD, kind);
+    client_send_request();
+
 #if 0
+    client_init(&sockFD, kind);
+    array_listenfd[sockFD] = sockFD;
+
     buf = qmalloc(Req.msg_size);
     sync_test();
     while (!Finished) {
@@ -326,44 +330,19 @@ int stream_client_bw_loop(void *arg)
     int nevents = ff_epoll_wait(epfd_tcp_bw,  events_tcp_bw, 1, 0);
     int i, iret, listenfd = -1, acceptfd = -1;
     if (nevents > 0){
-	//printf("nevents:%d\n", nevents);
-        ;
+	printf("nevents:%d\n", nevents);
+        
        
     }
 
     for (i = 0; i < nevents; ++i) {
-        listenfd = -1;
-        listenfd = events_tcp_bw[i].data.fd;
-        if (listenfd == array_listenfd[listenfd]) {
-            while (1) {
-               iret = ff_accept(listenfd, 0, 0);
-               //printf("***************child ready for requests:acceptfd:%d\n", iret);
-               if (iret < 0){
-                    printf("ff_accept failed:%d, %s\n", errno,
-                        strerror(errno));
-                   close(listenfd);
-                   break;
-               }
-               acceptfd = iret;
-               set_socket_buffer_size(acceptfd);
-
-                /* Add to event list */
-                ev_tcp_bw.data.fd = acceptfd;
-                ev_tcp_bw.events  = EPOLLIN;
-                if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_ADD, acceptfd, &ev_tcp_bw) != 0) {
-                    printf("ff_epoll_ctl failed:%d, %s\n", errno,
-                        strerror(errno));
-                    break;
-                }
-            }
-        }
-        else { 
-            if (events_tcp_bw[i].events & EPOLLERR ) {
+        if (events_tcp_bw[i].events & EPOLLERR ) {
                 /* Simply close socket */
                 printf("child link is close\n");
                 ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_DEL,  events_tcp_bw[i].data.fd, NULL);
                 ff_close(events_tcp_bw[i].data.fd);
-            } else if (events_tcp_bw[i].events & EPOLLIN) {
+        } 
+        else if (events_tcp_bw[i].events & EPOLLIN) {
               
 
                 //printf("children read...:%d, Finished: %d\n", Req.msg_size, Finished);
@@ -374,7 +353,7 @@ int stream_client_bw_loop(void *arg)
                 memset(&pbuf, 0x0, Req.msg_size);
                 char *buf = pbuf;
 
-                n = ff_read(events_tcp_bw[i].data.fd, buf, Req.msg_size);
+                n = ff_write(events_tcp_bw[i].data.fd, buf, Req.msg_size);
 
                 if (Finished){
                     printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
@@ -383,6 +362,7 @@ int stream_client_bw_loop(void *arg)
                     //free(buf);
                     if (events_tcp_bw[i].data.fd >= 0)
                         close(events_tcp_bw[i].data.fd);
+                    show_results(BANDWIDTH);
 
                     break;
                 }
@@ -395,10 +375,10 @@ int stream_client_bw_loop(void *arg)
                 if (Req.access_recv)
                     touch_data(buf, Req.msg_size);
 
-            } else {
+        } 
+        else {
                 printf("unknown event: %8.8X\n", events_tcp_bw[i].events);
                 return -1;
-            }
         }
     }
 
@@ -476,12 +456,13 @@ int stream_server_bw_loop(void *arg)
                 }
                 if (n < 0) {
                     LStat.r.no_errs++;
-                    break;
+                    continue;
                 }
                 LStat.r.no_bytes += n;
                 LStat.r.no_msgs++;
                 if (Req.access_recv)
                     touch_data(buf, Req.msg_size);
+                
 
             } else {
                 printf("unknown event: %8.8X\n", events_tcp_bw[i].events);
@@ -790,6 +771,22 @@ ip_parameters(long msgSize)
 }
 
 
+void ff_client_init(void)
+{
+    int sockFD;
+    client_init(&sockFD, K_SCTP);
+    array_listenfd[sockFD] = sockFD;
+    /* Add to event list */
+    ev_tcp_bw.data.fd = sockFD;
+    ev_tcp_bw.events  = EPOLLIN;
+    if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_ADD, sockFD, &ev_tcp_bw) != 0) {
+        error(0,"ff_epoll_ctl failed:%d, %s\n", errno,
+                strerror(errno));
+    }
+    sync_test();
+
+}
+
 /*
  * Socket client initialization.
  */
@@ -798,16 +795,21 @@ client_init(int *fd, KIND kind)
 {
     uint32_t rport;
     AI *ai, *ailist;
+    int iret;
 
-    client_send_request();
-
-    recv_mesg(&rport, sizeof(rport), "port");
+    iret = recv_mesg(&rport, sizeof(rport), "port");
     rport = decode_uint32(&rport);
+    printf("rport:%d, receive_ret:%d\n", rport, iret);
     ailist = getaddrinfo_kind(0, kind, rport);
     for (ai = ailist; ai; ai = ai->ai_next) {
         if (!ai->ai_family)
             continue;
         *fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        printf("child Listen:%d, family:%d, socktype:%d, protocol:%d\n", *fd, ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if(*fd<0){
+            continue;
+            printf("*fd:%d\n", *fd);
+        }
 	setsockopt_one(*fd, SO_REUSEADDR);
         if (connect(*fd, ai->ai_addr, ai->ai_addrlen) == SUCCESS0)
             break;
@@ -977,6 +979,7 @@ static void
 set_socket_buffer_size(int fd)
 {
     int size = Req.sock_buf_size;
+    printf("size:%d\n", size);
 
     if (!size)
         return;

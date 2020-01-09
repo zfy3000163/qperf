@@ -248,6 +248,8 @@ static void      view_strn(int type, char *pref, char *name, char *value);
 static void      view_time(int type, char *pref, char *name, double value);
 
 static int qperf_server_loop(void *arg);
+static int qperf_client_loop(void *arg);
+static int ff_qperf_client_init(TEST *test);
 
 /*
  * Configurable variables.
@@ -609,6 +611,8 @@ int
 main(int argc, char *argv[])
 {
 
+    ff_init(0, NULL);
+    ff_mod_init();
     initialize();
     set_signals();
     do_args(&argv[1]);
@@ -739,6 +743,7 @@ do_args(char *args[])
     int testSpecified = 0;
 
     while (*args) {
+        printf("args:%s\n", *args);
         char *arg = *args;
         if (arg[0] == '-') {
             OPTION *option = find_option(arg);
@@ -750,19 +755,20 @@ do_args(char *args[])
         } else {
             isClient = 1;
 
-            ff_init(0, NULL);
-            ff_mod_init();
 
             if (!ServerName)
                 ServerName = arg;
             else {
+                printf("arg:%s, servername:%s\n", arg, ServerName);
                 TEST *test = find_test(arg);
 
                 if (!test)
                     error(0, "%s: bad test; try: qperf --help tests", arg);
 
+                ff_qperf_client_init(test);
+
                 //do_loop(Loops, test);
-                //ff_run(qperf_client_loop, NULL);
+                ff_run(qperf_client_loop, NULL);
 
                 testSpecified = 1;
             }
@@ -771,9 +777,6 @@ do_args(char *args[])
     }
 
     if (!isClient){
-
-        ff_init(0, NULL);
-        ff_mod_init();
 
         server_listen();
 
@@ -1359,13 +1362,101 @@ opt_check(void)
     }
 }
 
+static int qperf_client_loop(void *arg)
+{
 
-int ff_qperf_client_init(TEST *test)
+    epoll_client(arg);
+    stream_client_bw_loop(arg);
+}
+
+static int ff_qperf_client_init(TEST *test)
 {
     client(test);
     
     return 0;
 }
+
+/*
+ * Client.
+ */
+int  
+epoll_client(void * arg)
+{
+
+    int nevents = ff_epoll_wait(epfd,  events, MAX_EVENTS, 0);
+    int i, iret;
+    if (nevents != 0)
+	
+        printf("nevents:%d\n", nevents);
+
+    for (i = 0; i < nevents; ++i) {
+
+        if (events[i].events & EPOLLERR ) {
+            /* Simply close socket */
+            printf("main qperf close listenfd\n");
+
+            ff_epoll_ctl(epfd, EPOLL_CTL_DEL,  events[i].data.fd, NULL);
+            ff_close(events[i].data.fd);
+
+            //remotefd_close();
+            place_show();
+            exit(-1);
+        }
+        else if (events[i].events & EPOLLIN) {
+
+            qperf_accpet_step[events[i].data.fd]++;
+
+            //printf("read...\n");
+            //remotefd_setup();
+
+            if(qperf_accpet_step[events[i].data.fd] == 1){
+
+                ff_client_init();
+
+            }
+            else if(qperf_accpet_step[events[i].data.fd] == 2){
+                sync_test();
+                printf("main step:%d\n", qperf_accpet_step[events[i].data.fd]);
+                iret = recv_sync("synchronization before test"); 
+                if(iret){
+                    printf("error qperf close listenfd\n");
+                    ff_epoll_ctl(epfd, EPOLL_CTL_DEL,  events[i].data.fd, NULL);
+                    ff_close(events[i].data.fd);
+                }
+
+            }
+            else if (qperf_accpet_step[events[i].data.fd] == 3){
+                printf("main step:%d\n", qperf_accpet_step[events[i].data.fd]);
+                iret = recv_sync("synchronization after test"); 
+                if(iret){
+                    printf("error qperf close listenfd\n");
+                    ff_epoll_ctl(epfd, EPOLL_CTL_DEL,  events[i].data.fd, NULL);
+                    ff_close(events[i].data.fd);
+                    //remotefd_close();
+                    place_show();
+                    exit(-1);
+                }
+                else{
+                    ff_epoll_ctl(epfd, EPOLL_CTL_DEL,  events[i].data.fd, NULL);
+                    ff_close(events[i].data.fd);
+                    //remotefd_close();
+                    place_show();
+                    exit(-1);
+                }
+
+            }
+        } 
+        else{
+            printf("unknown event: %8.8X\n", events[i].events);
+            return -1;
+        }
+
+    }
+
+    return 0;
+    
+}
+
 
 
 
@@ -1627,8 +1718,9 @@ client(TEST *test)
     init_lstat();
     printf("%s:\n", TestName);
     (*test->client)();
-    remotefd_close();
-    place_show();
+
+    //remotefd_close();
+    //place_show();
 }
 
 
@@ -1647,6 +1739,11 @@ client_send_request(void)
     memset(&hints, 0x0, sizeof(AI));
     AI *ailist = getaddrinfo_port(ServerName, ListenPort, &hints);
 
+    char ip[46];
+    int ipbuf_len = 46;
+    memset(&ip, 0x0, 46);
+    char *ipbuf = ip;
+
     RemoteFD = -1;
     if (ServerWait)
         start_test_timer(ServerWait);
@@ -1654,10 +1751,36 @@ client_send_request(void)
         for (a = ailist; a; a = a->ai_next) {
             if (Finished)
                 break;
+            printf("ai_faimily:%d\n", a->ai_family);
+            if (!a->ai_family)
+                continue;
             RemoteFD = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+            printf("child Listen:%d, family:%d, socktype:%d, protocol:%d\n", RemoteFD, a->ai_family, a->ai_socktype, a->ai_protocol);
             if (RemoteFD < 0)
                 continue;
+
+
+#if 0
+            setsockopt_one(RemoteFD, SO_REUSEADDR);
+            int on = 1;
+            ff_ioctl(RemoteFD, FIONBIO, &on);
+#else
+            if (a->ai_family == 2) {
+                printf("set1\n");
+                struct sockaddr_in *sa = (struct sockaddr_in *)a->ai_addr;
+                sa->sin_addr.s_addr = inet_addr(ServerName);
+                sa->sin_port = htons(ListenPort);
+                inet_ntop(AF_INET, &(sa->sin_addr), ipbuf, ipbuf_len);
+            } else {
+                printf("set2\n");
+                struct sockaddr_in6 *sa = (struct sockaddr_in6 *)a->ai_addr;
+                inet_ntop(AF_INET6, &(sa->sin6_addr), ipbuf, ipbuf_len);
+            }
+            printf("%d,%s\n", ipbuf_len, ipbuf);
+#endif
+
             if (connect(RemoteFD, a->ai_addr, a->ai_addrlen) != SUCCESS0) {
+                printf("connect is error\n");
                 remotefd_close();
                 continue;
             }
@@ -1676,10 +1799,20 @@ client_send_request(void)
 
     if (RemoteFD < 0)
         error(0, "%s: failed to connect", ServerName);
-    remotefd_setup();
+    printf("RemoteFD:%d\n", RemoteFD);
+    //remotefd_setup();
     enc_init(&req);
     enc_req(&RReq);
-    send_mesg(&req, sizeof(req), "request data");
+    int iret = send_mesg(&req, sizeof(req), "request data");
+    printf("send %d\n", iret);
+    
+    /*epoll of f-stack*/
+    assert((epfd = ff_epoll_create(0)) > 0);
+    ev.data.fd = RemoteFD;
+    ev.events = EPOLLIN;
+    ff_epoll_ctl(epfd, EPOLL_CTL_ADD, RemoteFD, &ev);
+
+    qperf_accpet_step[RemoteFD] = 0;
 }
 
 
@@ -1724,10 +1857,14 @@ exchange_results(void)
         recv_mesg(&stat, sizeof(stat), "results");
         dec_init(&stat);
         dec_stat(&RStat);
+        printf("rs:%d, %d\n", RStat.s.no_bytes, RStat.s.no_msgs);
+        printf("rr:%d, %d\n", RStat.r.no_bytes, RStat.r.no_msgs);
         send_sync("synchronization after test");
     } else {
         enc_init(&stat);
         enc_stat(&LStat);
+        printf("ls:%d, %d\n", LStat.s.no_bytes, LStat.s.no_msgs);
+        printf("lr:%d, %d\n", LStat.r.no_bytes, LStat.r.no_msgs);
         send_mesg(&stat, sizeof(stat), "results");
         //recv_sync("synchronization after test");
     }
