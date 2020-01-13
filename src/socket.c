@@ -330,52 +330,59 @@ int stream_client_bw_loop(void *arg)
     int nevents = ff_epoll_wait(epfd_tcp_bw,  events_tcp_bw, 1, 0);
     int i, iret, listenfd = -1, acceptfd = -1;
     if (nevents > 0){
-	printf("nevents:%d\n", nevents);
-        
-       
+	//printf("child client nevents:%d\n", nevents);
+        ;
     }
 
     for (i = 0; i < nevents; ++i) {
-        if (events_tcp_bw[i].events & EPOLLERR ) {
+        listenfd = -1;
+        listenfd = events_tcp_bw[i].data.fd;
+        if (events_tcp_bw[i].data.fd == array_listenfd[listenfd] &&  events_tcp_bw[i].events & EPOLLIN) {
+              
+            ;
+                
+        } 
+        else if (events_tcp_bw[i].events & EPOLLOUT ) {
+            //printf("child client send ....\n");
+
+            //sync_test();
+
+            //printf("children read...:%d, Finished: %d\n", Req.msg_size, Finished);
+            //remotefd_setup();
+            int n = 0;
+            //buf = qmalloc(Req.msg_size);
+            char pbuf[Req.msg_size];
+            memset(&pbuf, 0x0, Req.msg_size);
+            char *buf = pbuf;
+
+            n = ff_write(events_tcp_bw[i].data.fd, buf, Req.msg_size);
+
+            if (Finished){
+                printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
+                stop_test_timer();
+                //exchange_results();
+                //free(buf);
+                if (events_tcp_bw[i].data.fd >= 0)
+                    close(events_tcp_bw[i].data.fd);
+                //show_results(BANDWIDTH);
+
+                break;
+            }
+            if (n < 0) {
+                LStat.s.no_errs++;
+                break;
+            }
+            LStat.s.no_bytes += n;
+            LStat.s.no_msgs++;
+
+        }
+
+        else if (events_tcp_bw[i].events & EPOLLERR ) {
                 /* Simply close socket */
                 printf("child link is close\n");
                 ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_DEL,  events_tcp_bw[i].data.fd, NULL);
                 ff_close(events_tcp_bw[i].data.fd);
-        } 
-        else if (events_tcp_bw[i].events & EPOLLIN) {
-              
-
-                //printf("children read...:%d, Finished: %d\n", Req.msg_size, Finished);
-                //remotefd_setup();
-                int n = 0;
-                //buf = qmalloc(Req.msg_size);
-                char pbuf[Req.msg_size];
-                memset(&pbuf, 0x0, Req.msg_size);
-                char *buf = pbuf;
-
-                n = ff_write(events_tcp_bw[i].data.fd, buf, Req.msg_size);
-
-                if (Finished){
-                    printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
-                    stop_test_timer();
-                    exchange_results();
-                    //free(buf);
-                    if (events_tcp_bw[i].data.fd >= 0)
-                        close(events_tcp_bw[i].data.fd);
-                    show_results(BANDWIDTH);
-
-                    break;
-                }
-                if (n < 0) {
-                    LStat.r.no_errs++;
-                    break;
-                }
-                LStat.r.no_bytes += n;
-                LStat.r.no_msgs++;
-                if (Req.access_recv)
-                    touch_data(buf, Req.msg_size);
-
-        } 
+        }
         else {
                 printf("unknown event: %8.8X\n", events_tcp_bw[i].events);
                 return -1;
@@ -439,11 +446,21 @@ int stream_server_bw_loop(void *arg)
                 //remotefd_setup();
                 int n = 0;
                 //buf = qmalloc(Req.msg_size);
+
                 char pbuf[Req.msg_size];
                 memset(&pbuf, 0x0, Req.msg_size);
                 char *buf = pbuf;
-
                 n = ff_read(events_tcp_bw[i].data.fd, buf, Req.msg_size);
+
+                if (n < 0) {
+                    LStat.r.no_errs++;
+                    break;
+                }
+
+                LStat.r.no_bytes += n;
+                LStat.r.no_msgs++;
+                if (Req.access_recv)
+                    touch_data(buf, Req.msg_size);
 
                 if (Finished){
                     printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
@@ -454,15 +471,7 @@ int stream_server_bw_loop(void *arg)
                         close(events_tcp_bw[i].data.fd);
                     break;
                 }
-                if (n < 0) {
-                    LStat.r.no_errs++;
-                    continue;
-                }
-                LStat.r.no_bytes += n;
-                LStat.r.no_msgs++;
-                if (Req.access_recv)
-                    touch_data(buf, Req.msg_size);
-                
+
 
             } else {
                 printf("unknown event: %8.8X\n", events_tcp_bw[i].events);
@@ -774,16 +783,18 @@ ip_parameters(long msgSize)
 void ff_client_init(void)
 {
     int sockFD;
-    client_init(&sockFD, K_SCTP);
+    client_init(&sockFD, K_TCP);
     array_listenfd[sockFD] = sockFD;
     /* Add to event list */
+    assert((epfd_tcp_bw = ff_epoll_create(0)) > 0);
     ev_tcp_bw.data.fd = sockFD;
-    ev_tcp_bw.events  = EPOLLIN;
+    ev_tcp_bw.events = EPOLLIN|EPOLLET|EPOLLOUT;
+    //ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_ADD, sockFD, &ev_tcp_bw);
     if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_ADD, sockFD, &ev_tcp_bw) != 0) {
-        error(0,"ff_epoll_ctl failed:%d, %s\n", errno,
-                strerror(errno));
+        printf("ff_client_ctl error\n");
     }
-    sync_test();
+    printf("socdFD:%d\n", sockFD);
+    //sync_test();
 
 }
 
@@ -799,9 +810,10 @@ client_init(int *fd, KIND kind)
 
     iret = recv_mesg(&rport, sizeof(rport), "port");
     rport = decode_uint32(&rport);
-    printf("rport:%d, receive_ret:%d\n", rport, iret);
+    printf("rport:%d, kind:%d\n", rport, kind);
     ailist = getaddrinfo_kind(0, kind, rport);
     for (ai = ailist; ai; ai = ai->ai_next) {
+        printf("ai->ai_fimily:%d\n", ai->ai_family);
         if (!ai->ai_family)
             continue;
         *fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
@@ -811,9 +823,11 @@ client_init(int *fd, KIND kind)
             printf("*fd:%d\n", *fd);
         }
 	setsockopt_one(*fd, SO_REUSEADDR);
-        if (connect(*fd, ai->ai_addr, ai->ai_addrlen) == SUCCESS0)
-            break;
-        close(*fd);
+
+        //if (connect(*fd, ai->ai_addr, ai->ai_addrlen) == SUCCESS0)
+        connect(*fd, ai->ai_addr, ai->ai_addrlen); 
+        break;
+        //close(*fd);
     }
     freeaddrinfo(ailist);
     if (!ai)
@@ -847,12 +861,13 @@ stream_server_init(int *fd, KIND kind)
         printf("child Listen:%d, family:%d, socktype:%d, protocol:%d\n", *fd, ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (*fd < 0)
             continue;
-        setsockopt_one(*fd, SO_REUSEADDR);
 
+        setsockopt_one(*fd, SO_REUSEADDR);
         int on = 1;
         ff_ioctl(*fd, FIONBIO, &on);
+#if 0
 
-        if (ai->ai_family == 0) {
+        if (ai->ai_family == AF_INET) {
             struct sockaddr_in *sa = (struct sockaddr_in *)ai->ai_addr;
             sa->sin_addr.s_addr = htonl(INADDR_ANY);
             inet_ntop(AF_INET, &(sa->sin_addr), ipbuf, ipbuf_len);
@@ -861,6 +876,7 @@ stream_server_init(int *fd, KIND kind)
             inet_ntop(AF_INET6, &(sa->sin6_addr), ipbuf, ipbuf_len);
         }
         printf("%d,%s\n", ipbuf_len, ipbuf);
+#endif
 
         if (bind(*fd, ai->ai_addr, ai->ai_addrlen) == SUCCESS0)
             break;
