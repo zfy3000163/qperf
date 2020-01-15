@@ -323,7 +323,6 @@ stream_client_bw(KIND kind)
 #endif
 }
 
-int client_step=0;
 /*Client*/
 int stream_client_bw_loop(void *arg)
 {
@@ -343,8 +342,6 @@ int stream_client_bw_loop(void *arg)
             ;
         } 
         else if (events_tcp_bw[i].data.fd == array_listenfd[listenfd] && events_tcp_bw[i].events & EPOLLOUT ) {
-            //printf("child client send .... step:%d\n", client_step);
-            client_step++;
 
 
             //printf("children read...:%d, Finished: %d\n", Req.msg_size, Finished);
@@ -356,10 +353,8 @@ int stream_client_bw_loop(void *arg)
             memset(&pbuf, 0x0, Req.msg_size);
             char *buf = pbuf;
 
-            //while(!Finished){
             n = ff_write(events_tcp_bw[i].data.fd, buf, Req.msg_size);
             //n = send_full(events_tcp_bw[i].data.fd, buf, Req.msg_size);
-            printf("n:%d\n", n);
 
             if (Finished){
                 printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
@@ -379,7 +374,6 @@ int stream_client_bw_loop(void *arg)
             LStat.s.no_bytes += n;
             LStat.s.no_msgs++;
 
-            //}
 
         }
         else if (events_tcp_bw[i].events & EPOLLERR ) {
