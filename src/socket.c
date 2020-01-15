@@ -323,6 +323,7 @@ stream_client_bw(KIND kind)
 #endif
 }
 
+int client_step=0;
 /*Client*/
 int stream_client_bw_loop(void *arg)
 {
@@ -338,24 +339,27 @@ int stream_client_bw_loop(void *arg)
         listenfd = -1;
         listenfd = events_tcp_bw[i].data.fd;
         if (events_tcp_bw[i].data.fd == array_listenfd[listenfd] &&  events_tcp_bw[i].events & EPOLLIN) {
-              
+            printf("child client EPOLLIN\n");
             ;
-                
         } 
-        else if (events_tcp_bw[i].events & EPOLLOUT ) {
-            //printf("child client send ....\n");
+        else if (events_tcp_bw[i].data.fd == array_listenfd[listenfd] && events_tcp_bw[i].events & EPOLLOUT ) {
+            //printf("child client send .... step:%d\n", client_step);
+            client_step++;
 
-            //sync_test();
 
             //printf("children read...:%d, Finished: %d\n", Req.msg_size, Finished);
             //remotefd_setup();
             int n = 0;
             //buf = qmalloc(Req.msg_size);
+            Req.msg_size = 1000;
             char pbuf[Req.msg_size];
             memset(&pbuf, 0x0, Req.msg_size);
             char *buf = pbuf;
 
+            //while(!Finished){
             n = ff_write(events_tcp_bw[i].data.fd, buf, Req.msg_size);
+            //n = send_full(events_tcp_bw[i].data.fd, buf, Req.msg_size);
+            printf("n:%d\n", n);
 
             if (Finished){
                 printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
@@ -368,15 +372,16 @@ int stream_client_bw_loop(void *arg)
 
                 break;
             }
-            if (n < 0) {
+            if (n <= 0) {
                 LStat.s.no_errs++;
                 break;
             }
             LStat.s.no_bytes += n;
             LStat.s.no_msgs++;
 
-        }
+            //}
 
+        }
         else if (events_tcp_bw[i].events & EPOLLERR ) {
                 /* Simply close socket */
                 printf("child link is close\n");
@@ -1038,10 +1043,11 @@ send_full(int fd, void *ptr, int len)
     int n = len;
 
     while (!Finished && n) {
-        int i = ff_write(fd, ptr, n);
+        int i = ff_write(fd, ptr, 1000);
+        printf("i:%d\n",i);
 
         if (i < 0)
-            return i;
+            return len-n;
         ptr += i;
         n   -= i;
         if (i == 0)
