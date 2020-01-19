@@ -1935,8 +1935,8 @@ exchange_results(void)
     } else {
         enc_init(&stat);
         enc_stat(&LStat);
-        printf("ls:%d, %d\n", LStat.s.no_bytes, LStat.s.no_msgs);
-        printf("lr:%d, %d\n", LStat.r.no_bytes, LStat.r.no_msgs);
+        printf("server ls:%u, %u\n", LStat.s.no_bytes, LStat.s.no_msgs);
+        printf("server lr:%u, %u\n", LStat.r.no_bytes, LStat.r.no_msgs);
         send_mesg(&stat, sizeof(stat), "results");
         //recv_sync("synchronization after test");
     }
