@@ -610,8 +610,7 @@ TEST Tests[] ={
 int
 main(int argc, char *argv[])
 {
-
-
+    ff_init(argc, argv);
     initialize();
     set_signals();
     do_args(&argv[1]);
@@ -780,7 +779,7 @@ do_args(char *args[])
 
     if (!isClient){
 
-        ff_init(0, NULL);
+        //ff_init(0, NULL);
         ff_mod_init();
 
         server_listen();
@@ -1521,9 +1520,14 @@ epoll_client(void * arg)
 
 static int qperf_server_loop(void *arg)
 {
-
+    /* *Master connection */
     server(arg);
-    stream_server_bw_loop(arg);
+    
+    /* *Child connection */
+    if (TestName && !strcmp(TestName, "tcp_bw") )
+        stream_server_bw_loop(arg);
+    else if (TestName && !strcmp(TestName, "tcp_lat") )
+        stream_server_lat_loop(arg);
 }
 
 /*
@@ -1581,7 +1585,7 @@ server(void * arg)
               
                 qperf_accpet_step[events[i].data.fd]++;
 
-                //printf("read...\n");
+                printf("read...%d\n", qperf_accpet_step[events[i].data.fd]);
                 //remotefd_setup();
 
                 if(qperf_accpet_step[events[i].data.fd] == 1){

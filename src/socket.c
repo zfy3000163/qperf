@@ -68,6 +68,7 @@ int epfd_tcp_bw;
 
 
 
+
 /*
  * Parameters.
  */
@@ -348,13 +349,14 @@ int stream_client_bw_loop(void *arg)
             //remotefd_setup();
             int n = 0;
             //buf = qmalloc(Req.msg_size);
-            Req.msg_size = 1000;
+            //Req.msg_size = 1000;
             char pbuf[Req.msg_size];
             memset(&pbuf, 0x0, Req.msg_size);
             char *buf = pbuf;
 
             n = ff_write(events_tcp_bw[i].data.fd, buf, Req.msg_size);
             //n = send_full(events_tcp_bw[i].data.fd, buf, Req.msg_size);
+            //printf("n:%d\n", n);
 
             if (Finished){
                 printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
@@ -385,6 +387,127 @@ int stream_client_bw_loop(void *arg)
         else {
                 printf("unknown event: %8.8X\n", events_tcp_bw[i].events);
                 return -1;
+        }
+    }
+
+    return 0;
+
+}
+
+/*Lat Server*/
+int stream_server_lat_loop(void *arg)
+{
+    char *buf = 0;
+    int nevents = ff_epoll_wait(epfd_tcp_bw,  events_tcp_bw, 1, 0);
+    int i, iret, listenfd = -1, acceptfd = -1;
+    if (nevents > 0){
+	//printf("child nevents:%d\n", nevents);
+        ;
+    }
+
+    for (i = 0; i < nevents; ++i) {
+        listenfd = -1;
+        listenfd = events_tcp_bw[i].data.fd;
+        if (listenfd == array_listenfd[listenfd]) {
+            while (1) {
+               iret = ff_accept(listenfd, 0, 0);
+               //printf("***************child ready for requests:acceptfd:%d\n", iret);
+               if (iret < 0){
+                    printf("child ff_accept failed:%d, %s\n", errno,
+                        strerror(errno));
+                   close(listenfd);
+                   break;
+               }
+               acceptfd = iret;
+               set_socket_buffer_size(acceptfd);
+
+                /* Add to event list */
+                ev_tcp_bw.data.fd = acceptfd;
+                ev_tcp_bw.events  = EPOLLIN | EPOLLOUT;
+                if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_ADD, acceptfd, &ev_tcp_bw) != 0) {
+                    printf("child ff_epoll_ctl failed:%d, %s\n", errno,
+                        strerror(errno));
+                    break;
+                }
+            }
+        }
+        else { 
+            if (events_tcp_bw[i].events & EPOLLERR ) {
+                /* Simply close socket */
+                printf("child link is close\n");
+                ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_DEL,  events_tcp_bw[i].data.fd, NULL);
+                ff_close(events_tcp_bw[i].data.fd);
+            } 
+            else if (events_tcp_bw[i].events & EPOLLOUT) {
+              
+                //printf("children write...:%d, Finished: %d\n", Req.msg_size, Finished);
+
+                int n = 0;
+                //buf = qmalloc(Req.msg_size);
+
+                char pbuf[Req.msg_size];
+                memset(&pbuf, 0x0, Req.msg_size);
+                char *buf = pbuf;
+
+                n = ff_write(events_tcp_bw[i].data.fd, buf, Req.msg_size);
+
+                if (Finished){
+                    printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
+                    stop_test_timer();
+                    exchange_results();
+                    //free(buf);
+                    if (events_tcp_bw[i].data.fd >= 0)
+                        close(events_tcp_bw[i].data.fd);
+                    break;
+                }
+
+                if (n < 0) {
+                    LStat.r.no_errs++;
+                    break;
+                }
+
+                LStat.r.no_bytes += n;
+                LStat.r.no_msgs++;
+
+
+            }
+            else if (events_tcp_bw[i].events & EPOLLIN) {
+              
+
+                //printf("children read...:%d, Finished: %d\n", Req.msg_size, Finished);
+                //remotefd_setup();
+                int n = 0;
+                //buf = qmalloc(Req.msg_size);
+
+                char pbuf[Req.msg_size];
+                memset(&pbuf, 0x0, Req.msg_size);
+                char *buf = pbuf;
+                n = ff_read(events_tcp_bw[i].data.fd, buf, Req.msg_size);
+
+                if (n < 0) {
+                    LStat.r.no_errs++;
+                    break;
+                }
+
+                LStat.s.no_bytes += n;
+                LStat.s.no_msgs++;
+
+                if (Finished){
+                    printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
+                    //stop_test_timer();
+                    //exchange_results();
+                    //free(buf);
+                    //if (events_tcp_bw[i].data.fd >= 0)
+                    //    close(events_tcp_bw[i].data.fd);
+                    break;
+                }
+
+
+            } 
+            else {
+                printf("unknown event: %8.8X\n", events_tcp_bw[i].events);
+                return -1;
+            }
         }
     }
 
@@ -581,6 +704,9 @@ stream_server_lat(KIND kind)
     char *buf = 0;
 
     stream_server_init(&sockFD, kind);
+    array_listenfd[sockFD] = sockFD;
+
+#if 0
     sync_test();
     buf = qmalloc(Req.msg_size);
     while (!Finished) {
@@ -609,6 +735,8 @@ stream_server_lat(KIND kind)
     exchange_results();
     free(buf);
     close(sockFD);
+#endif
+
 }
 
 
@@ -897,7 +1025,7 @@ stream_server_init(int *fd, KIND kind)
     
     assert((epfd_tcp_bw = ff_epoll_create(0)) > 0);
     ev_tcp_bw.data.fd = *fd;
-    ev_tcp_bw.events = EPOLLIN;
+    ev_tcp_bw.events = EPOLLIN | EPOLLOUT;
     ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_ADD, *fd, &ev_tcp_bw);
 
 #if 0
