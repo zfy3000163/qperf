@@ -207,7 +207,7 @@ run_client_tcp_bw(void)
 {
     par_use(L_ACCESS_RECV);
     par_use(R_ACCESS_RECV);
-    ip_parameters(64*1024);
+    ip_parameters(100*1024);
     stream_client_bw(K_TCP);
 }
 
@@ -339,8 +339,20 @@ int stream_client_bw_loop(void *arg)
         listenfd = -1;
         listenfd = events_tcp_bw[i].data.fd;
         if (events_tcp_bw[i].data.fd == array_listenfd[listenfd] &&  events_tcp_bw[i].events & EPOLLIN) {
-            printf("child client EPOLLIN\n");
-            ;
+            char buf1[100];
+            int readlen = ff_read( events_tcp_bw[i].data.fd, buf1, sizeof(buf1));
+            //printf("child client EPOLLIN:%d\n", readlen);
+ #if 1
+            ev_tcp_bw.data.fd = events_tcp_bw[i].data.fd;
+            ev_tcp_bw.events = EPOLLOUT | EPOLLET;
+            if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_MOD, events_tcp_bw[i].data.fd, &ev_tcp_bw) != 0) {
+                printf("ff_epoll_ctl failed:%d, %s\n", errno,
+                        strerror(errno));
+                break;
+            }
+#endif
+
+ 
         } 
         else if (events_tcp_bw[i].data.fd == array_listenfd[listenfd] && events_tcp_bw[i].events & EPOLLOUT ) {
 
@@ -371,10 +383,31 @@ int stream_client_bw_loop(void *arg)
             }
             if (n <= 0) {
                 LStat.s.no_errs++;
+#if 1
+                ev_tcp_bw.data.fd = events_tcp_bw[i].data.fd;
+                ev_tcp_bw.events = EPOLLIN | EPOLLET;
+                if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_MOD, events_tcp_bw[i].data.fd, &ev_tcp_bw) != 0) {
+                    printf("ff_epoll_ctl failed:%d, %s\n", errno,
+                            strerror(errno));
+                    break;
+                }
+#endif
+
+
                 break;
             }
             LStat.s.no_bytes += n;
             LStat.s.no_msgs++;
+
+#if 1
+            ev_tcp_bw.data.fd = events_tcp_bw[i].data.fd;
+            ev_tcp_bw.events = EPOLLIN | EPOLLET;
+            if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_MOD, events_tcp_bw[i].data.fd, &ev_tcp_bw) != 0) {
+                printf("ff_epoll_ctl failed:%d, %s\n", errno,
+                        strerror(errno));
+                break;
+            }
+#endif
 
 
         }
