@@ -361,7 +361,7 @@ int stream_client_bw_loop(void *arg)
             //remotefd_setup();
             int n = 0;
             //buf = qmalloc(Req.msg_size);
-            //Req.msg_size = 1000;
+            Req.msg_size = 1000;
             char pbuf[Req.msg_size];
             memset(&pbuf, 0x0, Req.msg_size);
             char *buf = pbuf;
@@ -685,6 +685,150 @@ stream_server_bw(KIND kind)
 
 }
 
+/*tcp lat Client*/
+int stream_client_lat_loop(void *arg)
+{
+    char *buf = 0;
+    int nevents = ff_epoll_wait(epfd_tcp_bw,  events_tcp_bw, 1, 0);
+    int i, iret, listenfd = -1, acceptfd = -1;
+    if (nevents > 0){
+	//printf("child client nevents:%d\n", nevents);
+        ;
+    }
+
+    for (i = 0; i < nevents; ++i) {
+        listenfd = -1;
+        listenfd = events_tcp_bw[i].data.fd;
+        if (events_tcp_bw[i].data.fd == array_listenfd[listenfd] &&  events_tcp_bw[i].events & EPOLLIN) {
+
+            //printf("children read...:%d, Finished: %d\n", Req.msg_size, Finished);
+            //remotefd_setup();
+            int n = 0;
+            //buf = qmalloc(Req.msg_size);
+            //Req.msg_size = 1000;
+            char pbuf[Req.msg_size];
+            memset(&pbuf, 0x0, Req.msg_size);
+            char *buf = pbuf;
+
+            n = ff_read(events_tcp_bw[i].data.fd, buf, Req.msg_size);
+            //n = send_full(events_tcp_bw[i].data.fd, buf, Req.msg_size);
+            //printf("n:%d\n", n);
+
+            if (Finished){
+                printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
+                stop_test_timer();
+                //exchange_results();
+                //free(buf);
+                if (events_tcp_bw[i].data.fd >= 0)
+                    close(events_tcp_bw[i].data.fd);
+                //show_results(BANDWIDTH);
+
+                break;
+            }
+            if (n <= 0) {
+                LStat.r.no_errs++;
+#if 1
+                ev_tcp_bw.data.fd = events_tcp_bw[i].data.fd;
+                ev_tcp_bw.events = EPOLLOUT | EPOLLET;
+                if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_MOD, events_tcp_bw[i].data.fd, &ev_tcp_bw) != 0) {
+                    printf("ff_epoll_ctl failed:%d, %s\n", errno,
+                            strerror(errno));
+                    break;
+                }
+#endif
+
+
+                break;
+            }
+            LStat.r.no_bytes += n;
+            LStat.r.no_msgs++;
+
+#if 1
+            ev_tcp_bw.data.fd = events_tcp_bw[i].data.fd;
+            ev_tcp_bw.events = EPOLLOUT | EPOLLET;
+            if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_MOD, events_tcp_bw[i].data.fd, &ev_tcp_bw) != 0) {
+                printf("ff_epoll_ctl failed:%d, %s\n", errno,
+                        strerror(errno));
+                break;
+            }
+#endif
+
+
+ 
+        } 
+        else if (events_tcp_bw[i].data.fd == array_listenfd[listenfd] && events_tcp_bw[i].events & EPOLLOUT ) {
+
+
+            //printf("children read...:%d, Finished: %d\n", Req.msg_size, Finished);
+            //remotefd_setup();
+            int n = 0;
+            //buf = qmalloc(Req.msg_size);
+            //Req.msg_size = 1000;
+            char pbuf[Req.msg_size];
+            memset(&pbuf, 0x0, Req.msg_size);
+            char *buf = pbuf;
+
+            n = ff_write(events_tcp_bw[i].data.fd, buf, Req.msg_size);
+            //n = send_full(events_tcp_bw[i].data.fd, buf, Req.msg_size);
+            //printf("n:%d\n", n);
+
+            if (Finished){
+                printf("child finished break:%d, Req.msg_size:%d\n", Finished, Req.msg_size);
+                //stop_test_timer();
+                //exchange_results();
+                //free(buf);
+                //if (events_tcp_bw[i].data.fd >= 0)
+                //    close(events_tcp_bw[i].data.fd);
+                //show_results(BANDWIDTH);
+
+                break;
+            }
+            if (n <= 0) {
+                LStat.s.no_errs++;
+#if 1
+                ev_tcp_bw.data.fd = events_tcp_bw[i].data.fd;
+                ev_tcp_bw.events = EPOLLIN | EPOLLET;
+                if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_MOD, events_tcp_bw[i].data.fd, &ev_tcp_bw) != 0) {
+                    printf("ff_epoll_ctl failed:%d, %s\n", errno,
+                            strerror(errno));
+                    break;
+                }
+#endif
+
+
+                break;
+            }
+            LStat.s.no_bytes += n;
+            LStat.s.no_msgs++;
+
+#if 1
+            ev_tcp_bw.data.fd = events_tcp_bw[i].data.fd;
+            ev_tcp_bw.events = EPOLLIN | EPOLLET;
+            if (ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_MOD, events_tcp_bw[i].data.fd, &ev_tcp_bw) != 0) {
+                printf("ff_epoll_ctl failed:%d, %s\n", errno,
+                        strerror(errno));
+                break;
+            }
+#endif
+
+
+        }
+        else if (events_tcp_bw[i].events & EPOLLERR ) {
+                /* Simply close socket */
+                printf("child link is close\n");
+                ff_epoll_ctl(epfd_tcp_bw, EPOLL_CTL_DEL,  events_tcp_bw[i].data.fd, NULL);
+                ff_close(events_tcp_bw[i].data.fd);
+        }
+        else {
+                printf("unknown event: %8.8X\n", events_tcp_bw[i].events);
+                return -1;
+        }
+    }
+
+    return 0;
+
+}
+
 
 /*
  * Measure stream latency (client side).
@@ -694,6 +838,10 @@ stream_client_lat(KIND kind)
 {
     char *buf;
     int sockFD;
+
+    client_send_request();
+
+#if 0
     client_init(&sockFD, kind);
     buf = qmalloc(Req.msg_size);
     sync_test();
@@ -724,6 +872,8 @@ stream_client_lat(KIND kind)
     free(buf);
     close(sockFD);
     show_results(LATENCY);
+#endif
+
 }
 
 

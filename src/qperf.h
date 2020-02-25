@@ -288,6 +288,7 @@ void        urgent(void);
 /*
  * Socket tests in socket.c.
  */
+int stream_client_lat_loop(void *arg);
 int stream_client_bw_loop(void *arg);
 int stream_server_bw_loop(void *arg);
 void    run_client_rds_bw(void);

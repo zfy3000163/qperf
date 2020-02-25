@@ -610,7 +610,7 @@ TEST Tests[] ={
 int
 main(int argc, char *argv[])
 {
-    ff_init(argc, argv);
+    //ff_init(argc, argv);
     initialize();
     set_signals();
     do_args(&argv[1]);
@@ -779,14 +779,14 @@ do_args(char *args[])
 
     if (!isClient){
 
-        //ff_init(0, NULL);
+        ff_init(0, NULL);
         ff_mod_init();
 
         server_listen();
 
         assert((epfd = ff_epoll_create(0)) > 0);
         ev.data.fd = ListenFD;
-        ev.events = EPOLLIN;
+        ev.events = EPOLLIN | EPOLLOUT;
         ff_epoll_ctl(epfd, EPOLL_CTL_ADD, ListenFD, &ev);
 
 
@@ -1370,7 +1370,11 @@ static int qperf_client_loop(void *arg)
 {
 
     epoll_client(arg);
-    stream_client_bw_loop(arg);
+
+    if (TestName && !strcmp(TestName, "tcp_bw") )
+        stream_client_bw_loop(arg);
+    else if (TestName && !strcmp(TestName, "tcp_lat") )
+        stream_client_lat_loop(arg);
 }
 
 static int ff_qperf_client_init(TEST *test)
@@ -1453,7 +1457,10 @@ epoll_client(void * arg)
                     ff_epoll_ctl(epfd, EPOLL_CTL_DEL,  events[i].data.fd, NULL);
                     ff_close(events[i].data.fd);
                     //remotefd_close();
-                    show_results(BANDWIDTH);
+                    if (TestName && !strcmp(TestName, "tcp_bw") )
+                        show_results(BANDWIDTH);
+                    else if (TestName && !strcmp(TestName, "tcp_lat") )
+                        show_results(LATENCY);
                     place_show();
                     exit(-1);
                 }
@@ -1461,7 +1468,10 @@ epoll_client(void * arg)
                     ff_epoll_ctl(epfd, EPOLL_CTL_DEL,  events[i].data.fd, NULL);
                     ff_close(events[i].data.fd);
                     //remotefd_close();
-                    show_results(BANDWIDTH);
+                    if (TestName && !strcmp(TestName, "tcp_bw") )
+                        show_results(BANDWIDTH);
+                    else if (TestName && !strcmp(TestName, "tcp_lat") )
+                        show_results(LATENCY);
                     place_show();
                     exit(-1);
                 }
